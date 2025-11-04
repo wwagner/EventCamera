@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir:*)",
+      "Bash(powershell -Command \"Get-ChildItem ''C:\\Users\\wolfw\\source\\tracking'' -Recurse | Select-Object FullName\")",
+      "Bash(powershell -Command \"Get-ChildItem ''C:\\Users\\wolfw\\source\\repos\\tracking'' -Recurse | Select-Object FullName, Extension | Sort-Object FullName\")",
+      "Bash(powershell:*)",
+      "Bash(mkdir:*)",
+      "Bash(git init:*)",
+      "Bash(git add:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
