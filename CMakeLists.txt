@@ -127,8 +127,8 @@ if(WIN32)
     )
     add_custom_command(TARGET event_camera_viewer POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_CURRENT_SOURCE_DIR}/tracking_config.ini"
-        $<TARGET_FILE_DIR:event_camera_viewer>/tracking_config.ini
+        "${CMAKE_CURRENT_SOURCE_DIR}/event_config.ini"
+        $<TARGET_FILE_DIR:event_camera_viewer>/event_config.ini
         COMMENT "Copying config file to output directory"
     )
     # Copy GLFW DLL if using dynamic linking

@@ -44,8 +44,8 @@ bool AppConfig::load(const std::string& filename) {
     if (!file.is_open()) {
         std::cerr << "Config file not found: " << filename << " (using defaults)" << std::endl;
         std::cerr << "Note: Config file should be in the same directory as the executable" << std::endl;
-        std::cerr << "  Default LED count: " << simulation_settings_.led_count << std::endl;
-        std::cerr << "  Default LED radius: " << simulation_settings_.led_radius_m << "m" << std::endl;
+        std::cerr << "  Using default camera bias settings (all 128)" << std::endl;
+        std::cerr << "  Default frame accumulation time: " << camera_settings_.accumulation_time_s << "s" << std::endl;
         return false;
     }
 
@@ -248,7 +248,7 @@ bool AppConfig::load(const std::string& filename) {
     }
 
     std::cout << "Configuration loaded from: " << filename << std::endl;
-    std::cout << "  Loaded LED count: " << simulation_settings_.led_count << std::endl;
-    std::cout << "  Loaded LED radius: " << simulation_settings_.led_radius_m << "m" << std::endl;
+    std::cout << "  Camera bias settings loaded" << std::endl;
+    std::cout << "  Frame accumulation time: " << camera_settings_.accumulation_time_s << "s" << std::endl;
     return true;
 }

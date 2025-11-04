@@ -14,7 +14,7 @@
  * - Rendering parameters (colors, fonts, sizes)
  * - Algorithm parameters (thresholds, debug intervals)
  *
- * Configuration is loaded from tracking_config.ini in the working directory.
+ * Configuration is loaded from event_config.ini in the working directory.
  *
  * NAMING CONVENTION:
  * - _m = meters
@@ -227,7 +227,7 @@ public:
 
     // Load configuration from file (returns true if successful)
     // Default path points to root directory (../../../ from build/bin/Release)
-    bool load(const std::string& filename = "../../../tracking_config.ini");
+    bool load(const std::string& filename = "../../../event_config.ini");
 
     // Accessors
     CameraSettings& camera_settings() { return camera_settings_; }
