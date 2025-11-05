@@ -47,6 +47,26 @@ All notable changes to the Event Camera Viewer project are documented in this fi
   - Range clamping for preset buttons
   - Error handling for out-of-range frequencies
 
+- **Event Trail Filter Module**: Noise reduction from event bursts
+  - Enable/disable checkbox
+  - Filter type dropdown (TRAIL / STC_CUT_TRAIL / STC_KEEP_TRAIL)
+    - TRAIL: Keep only first event from burst
+    - STC_CUT_TRAIL: Keep only second event after polarity change
+    - STC_KEEP_TRAIL: Keep all trailing events after polarity change
+  - Adjustable threshold delay slider (microseconds between bursts)
+  - Min/max threshold display based on camera capabilities
+  - Real-time threshold updates
+  - Improves signal-to-noise ratio and reduces flickering artifacts
+
+- **Digital Crop Module**: Hardware-level sensor resolution reduction
+  - Enable/disable checkbox
+  - Interactive X/Y position sliders for crop region
+  - Width/Height size sliders with bounds checking
+  - Real-time crop region updates (auto-apply when enabled)
+  - Hardware-level cropping (pixels dropped by sensor, not software)
+  - Reduces data volume and improves processing performance
+  - Coordinate conversion from (x, y, width, height) to (start_x, start_y, end_x, end_y)
+
 - **Quick Launcher Script**: `run_event_camera.bat`
   - Automatically navigates to build directory
   - Checks for executable existence

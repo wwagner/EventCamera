@@ -30,6 +30,8 @@
 #include <metavision/hal/facilities/i_erc_module.h>
 #include <metavision/hal/facilities/i_monitoring.h>
 #include <metavision/hal/facilities/i_antiflicker_module.h>
+#include <metavision/hal/facilities/i_event_trail_filter_module.h>
+#include <metavision/hal/facilities/i_digital_crop.h>
 
 // Local headers
 #include "camera_manager.h"
@@ -800,6 +802,138 @@ int main(int argc, char* argv[]) {
                     }
 
                     ImGui::TextWrapped("Range: %d - %d Hz", min_freq, max_freq);
+                }
+            }
+
+            // Event Trail Filter Module
+            auto* trail_filter = cam_info.camera->get_device().get_facility<Metavision::I_EventTrailFilterModule>();
+            if (trail_filter) {
+                if (ImGui::CollapsingHeader("Event Trail Filter")) {
+                    static bool etf_enabled = false;
+                    static int etf_type = 0;  // 0=TRAIL, 1=STC_CUT_TRAIL, 2=STC_KEEP_TRAIL
+                    static int etf_threshold = 10000;  // microseconds
+
+                    ImGui::TextWrapped("Filter noise from event bursts and rapid flickering");
+                    ImGui::Spacing();
+
+                    if (ImGui::Checkbox("Enable Trail Filter", &etf_enabled)) {
+                        try {
+                            trail_filter->enable(etf_enabled);
+                            std::cout << "Event Trail Filter " << (etf_enabled ? "enabled" : "disabled") << std::endl;
+                        } catch (const std::exception& e) {
+                            std::cerr << "Error enabling trail filter: " << e.what() << std::endl;
+                        }
+                    }
+
+                    ImGui::Spacing();
+
+                    // Filter Type
+                    const char* etf_types[] = {
+                        "TRAIL (Keep first event)",
+                        "STC_CUT_TRAIL (Keep second event)",
+                        "STC_KEEP_TRAIL (Keep trailing events)"
+                    };
+                    if (ImGui::Combo("Filter Type", &etf_type, etf_types, 3)) {
+                        try {
+                            Metavision::I_EventTrailFilterModule::Type type;
+                            switch (etf_type) {
+                                case 0: type = Metavision::I_EventTrailFilterModule::Type::TRAIL; break;
+                                case 1: type = Metavision::I_EventTrailFilterModule::Type::STC_CUT_TRAIL; break;
+                                case 2: type = Metavision::I_EventTrailFilterModule::Type::STC_KEEP_TRAIL; break;
+                                default: type = Metavision::I_EventTrailFilterModule::Type::TRAIL; break;
+                            }
+                            trail_filter->set_type(type);
+                            std::cout << "Trail filter type set to " << etf_types[etf_type] << std::endl;
+                        } catch (const std::exception& e) {
+                            std::cerr << "Error setting trail filter type: " << e.what() << std::endl;
+                        }
+                    }
+
+                    ImGui::Spacing();
+
+                    // Threshold Delay
+                    ImGui::Text("Threshold Delay:");
+                    try {
+                        uint32_t min_thresh = trail_filter->get_min_supported_threshold();
+                        uint32_t max_thresh = trail_filter->get_max_supported_threshold();
+
+                        if (ImGui::SliderInt("Threshold (μs)", &etf_threshold, min_thresh, max_thresh)) {
+                            try {
+                                trail_filter->set_threshold(etf_threshold);
+                                std::cout << "Trail filter threshold set to " << etf_threshold << " μs" << std::endl;
+                            } catch (const std::exception& e) {
+                                std::cerr << "Error setting threshold: " << e.what() << std::endl;
+                            }
+                        }
+
+                        ImGui::TextWrapped("Range: %d - %d μs", min_thresh, max_thresh);
+                        ImGui::Spacing();
+                        ImGui::TextWrapped("Lower threshold = more aggressive filtering");
+                    } catch (const std::exception& e) {
+                        std::cerr << "Error getting threshold range: " << e.what() << std::endl;
+                        ImGui::TextWrapped("Error: Could not get threshold range");
+                    }
+                }
+            }
+
+            // Digital Crop Module
+            auto* digital_crop = cam_info.camera->get_device().get_facility<Metavision::I_DigitalCrop>();
+            if (digital_crop) {
+                if (ImGui::CollapsingHeader("Digital Crop")) {
+                    static bool dc_enabled = false;
+                    static int dc_x = 0, dc_y = 0;
+                    static int dc_width = image_width;
+                    static int dc_height = image_height;
+
+                    ImGui::TextWrapped("Crop sensor output to reduce resolution and data volume");
+                    ImGui::Spacing();
+
+                    if (ImGui::Checkbox("Enable Digital Crop", &dc_enabled)) {
+                        try {
+                            digital_crop->enable(dc_enabled);
+                            std::cout << "Digital Crop " << (dc_enabled ? "enabled" : "disabled") << std::endl;
+                        } catch (const std::exception& e) {
+                            std::cerr << "Error enabling digital crop: " << e.what() << std::endl;
+                        }
+                    }
+
+                    ImGui::Spacing();
+
+                    // Position and size controls
+                    ImGui::Text("Crop Region:");
+                    bool dc_changed = false;
+                    dc_changed |= ImGui::SliderInt("X Position", &dc_x, 0, image_width - 1);
+                    dc_changed |= ImGui::SliderInt("Y Position", &dc_y, 0, image_height - 1);
+                    dc_changed |= ImGui::SliderInt("Width", &dc_width, 1, image_width);
+                    dc_changed |= ImGui::SliderInt("Height", &dc_height, 1, image_height);
+
+                    // Apply crop region if changed and enabled
+                    if (dc_changed && dc_enabled) {
+                        try {
+                            // Ensure crop region is within bounds
+                            int max_w = image_width - dc_x;
+                            int max_h = image_height - dc_y;
+                            dc_width = std::min(dc_width, max_w);
+                            dc_height = std::min(dc_height, max_h);
+
+                            // Convert from (x, y, width, height) to (start_x, start_y, end_x, end_y)
+                            uint32_t start_x = dc_x;
+                            uint32_t start_y = dc_y;
+                            uint32_t end_x = dc_x + dc_width - 1;
+                            uint32_t end_y = dc_y + dc_height - 1;
+
+                            Metavision::I_DigitalCrop::Region region(start_x, start_y, end_x, end_y);
+                            digital_crop->set_window_region(region, false);
+                            std::cout << "Digital crop region set to [" << start_x << ", " << start_y
+                                     << ", " << end_x << ", " << end_y << "]" << std::endl;
+                        } catch (const std::exception& e) {
+                            std::cerr << "Error setting crop region: " << e.what() << std::endl;
+                        }
+                    }
+
+                    ImGui::Spacing();
+                    ImGui::TextWrapped("Note: Digital crop reduces sensor resolution");
+                    ImGui::TextWrapped("Similar to ROI but less flexible");
                 }
             }
         }

@@ -47,6 +47,24 @@ A comprehensive C++ application for viewing and controlling event camera feeds w
 - Adjustable frequency band and duty cycle
 - Real-time filter updates
 
+#### Event Trail Filter
+- Filter noise from event bursts and rapid flickering
+- **Filter Types**:
+  - TRAIL: Keep only first event from burst, filter trailing events
+  - STC_CUT_TRAIL: Keep only second event after polarity change
+  - STC_KEEP_TRAIL: Keep all trailing events after polarity change
+- Adjustable threshold delay (microseconds between bursts)
+- Real-time threshold updates
+- Improves signal-to-noise ratio
+
+#### Digital Crop
+- Crop sensor output to reduce resolution and data volume
+- Hardware-level cropping (all pixels outside dropped by sensor)
+- Adjustable crop region (X, Y, Width, Height)
+- Real-time crop region updates
+- Reduces processing load and improves performance
+- Similar to ROI but less flexible (entire sensor resolution reduced)
+
 ### User Interface
 - **ImGui-Based Controls**: Clean, responsive settings panel
 - **Thread-Safe Updates**: Mutex-protected frame generation and camera control
@@ -241,6 +259,46 @@ Remove artificial lighting artifacts:
 - Remove 50Hz/60Hz flicker from videos
 - Improve signal quality in office/industrial environments
 
+### Event Trail Filter
+
+Reduce noise from event bursts:
+
+1. **Enable Trail Filter**: Check the "Enable Trail Filter" box
+2. **Select Filter Type**:
+   - **TRAIL**: Keep only first event from burst, filter trailing events (most common)
+   - **STC_CUT_TRAIL**: Keep only second event after polarity change, filter rest
+   - **STC_KEEP_TRAIL**: Keep all trailing events after polarity change, filter first
+3. **Threshold Delay**: Adjust the threshold slider (microseconds)
+   - Lower threshold = more aggressive filtering
+   - Higher threshold = keep more events
+
+**Use Cases**:
+- Reduce noise from rapid flickering
+- Clean up trailing artifacts from moving objects
+- Improve signal-to-noise ratio in high-speed scenes
+- Handle high-frequency patterns and vibrations
+
+### Digital Crop
+
+Reduce sensor resolution to improve performance:
+
+1. **Enable Digital Crop**: Check the "Enable Digital Crop" box
+2. **Position Controls**: Use X/Y sliders to position the crop region
+3. **Size Controls**: Use Width/Height sliders to set crop region size
+4. **Real-Time Updates**: Crop region applies as you adjust sliders (when enabled)
+
+**Important Notes**:
+- Digital crop reduces the entire sensor resolution (hardware-level)
+- All pixels outside crop region are dropped by the sensor
+- Similar to ROI but less flexible (cannot have multiple regions)
+- Best used when you need to permanently reduce resolution for performance
+
+**Use Cases**:
+- Reduce data volume for recording or transmission
+- Focus on specific sensor area permanently
+- Improve processing speed for real-time applications
+- Reduce USB bandwidth usage
+
 ### Keyboard Controls
 
 - **ESC**: Exit application
@@ -293,9 +351,8 @@ For a complete list of available Metavision SDK camera features (including those
 - **AVAILABLE_CAMERA_FEATURES.md**: Comprehensive documentation of all facilities
 
 Additional features available for future implementation:
-- Event Trail Filter (noise reduction)
-- Digital Crop (resolution reduction)
-- Trigger In/Out (multi-camera sync)
+- Trigger In/Out (multi-camera synchronization with external signals)
+- Advanced ROI modes (multiple windows, line-based ROI)
 
 ## Technical Notes
 

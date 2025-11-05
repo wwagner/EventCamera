@@ -5,139 +5,54 @@ This document lists the camera features available in the Metavision SDK that cou
 ## Currently Exposed Features ✓
 
 ### Camera Biases (via I_LL_Biases)
-- **bias_diff** - Event detection threshold (0-255)
-- **bias_refr** - Refractory period (0-255)
-- **bias_fo** - Photoreceptor follower (0-255)
-- **bias_hpf** - High-pass filter (0-255)
-- **bias_pr** - Pixel photoreceptor (0-255)
+- **bias_diff** - Event detection threshold (hardware-specific range)
+- **bias_refr** - Refractory period (hardware-specific range)
+- **bias_fo** - Photoreceptor follower (hardware-specific range)
+- **bias_hpf** - High-pass filter (hardware-specific range)
+- **bias_pr** - Pixel photoreceptor (hardware-specific range)
+- **Dynamic range detection** - Queries camera-specific min/max values
 
 ### Frame Generation
 - **accumulation_time_s** - Event accumulation period (0.001-0.1s)
+
+### Hardware Monitoring (via I_Monitoring)
+- **Temperature** - Sensor temperature monitoring (°C)
+- **Pixel Dead Time** - Refractory period display (microseconds)
+- **Capability Detection** - Automatic detection of supported features
+
+### Region of Interest (via I_ROI)
+- **ROI Window** - Rectangular region control (X, Y, Width, Height)
+- **Visual Overlay** - Green rectangle showing ROI position
+- **Crop to ROI View** - Optional zoomed view of ROI region only
+- **Real-time Updates** - Auto-apply as sliders move
+
+### Event Rate Controller (via I_ErcModule)
+- **Rate Limiting** - Target event rate control (events/second)
+- **Bandwidth Management** - Prevent USB saturation
+- **Rate Display** - Current and target rate monitoring
+
+### Anti-Flicker Filter (via I_AntiFlickerModule)
+- **Filter Modes** - BAND_STOP / BAND_PASS
+- **Frequency Band** - Configurable low/high frequency range
+- **Duty Cycle** - Adjustable duty cycle percentage
+- **Quick Presets** - 50Hz, 60Hz, 100Hz, 120Hz buttons
+
+### Event Trail Filter (via I_EventTrailFilterModule)
+- **Filter Types** - TRAIL / STC_CUT_TRAIL / STC_KEEP_TRAIL
+- **Threshold Delay** - Adjustable time between bursts (μs)
+- **Noise Reduction** - Filter trailing events from bursts
+
+### Digital Crop (via I_DigitalCrop)
+- **Crop Region** - Hardware-level sensor cropping
+- **Position Control** - X/Y sliders for crop position
+- **Size Control** - Width/Height sliders for crop size
+- **Real-time Updates** - Auto-apply crop region changes
 
 ---
 
 ## Available But NOT Currently Exposed
 
-### 1. Region of Interest (ROI) - I_ROI
-**Purpose:** Define rectangular regions to process/ignore events
-
-**Features:**
-- Set ROI mode: ROI (keep events inside) or RONI (discard events inside)
-- Define rectangular windows (x, y, width, height)
-- Support for multiple windows
-- Enable/disable ROI
-- Line-based ROI (row/column binary maps)
-
-**Use Cases:**
-- Focus processing on specific areas
-- Reduce data bandwidth
-- Filter out noisy regions
-- Track specific zones
-
-**Access:** `camera.get_device().get_facility<Metavision::I_ROI>()`
-
----
-
-### 2. Event Rate Controller (ERC) - I_ErcModule
-**Purpose:** Limit maximum event rate to prevent bandwidth saturation
-
-**Features:**
-- Enable/disable ERC
-- Set target event rate (events/second)
-- Set event count per time period
-- Get count period (reference time window)
-- Get min/max supported rates
-
-**Use Cases:**
-- Prevent USB bandwidth overload
-- Limit processing load
-- Handle high-speed scenes
-- Stabilize event flow
-
-**Access:** `camera.get_device().get_facility<Metavision::I_ErcModule>()`
-
----
-
-### 3. Event Trail Filter - I_EventTrailFilterModule
-**Purpose:** Filter noise from event bursts
-
-**Filter Types:**
-- **TRAIL** - Keep only first event from burst, filter trailing events
-- **STC_CUT_TRAIL** - Keep only second event after polarity change, filter rest
-- **STC_KEEP_TRAIL** - Keep all trailing events after polarity change, filter first
-
-**Features:**
-- Enable/disable filter
-- Set filter type
-- Set threshold delay (microseconds between bursts)
-- Get min/max threshold values
-
-**Use Cases:**
-- Reduce noise from rapid flickering
-- Clean up trailing artifacts
-- Improve signal-to-noise ratio
-- Handle high-frequency patterns
-
-**Access:** `camera.get_device().get_facility<Metavision::I_EventTrailFilterModule>()`
-
----
-
-### 4. Anti-Flicker Module - I_AntiFlickerModule
-**Purpose:** Filter events caused by artificial lighting (50/60Hz flicker)
-
-**Features:**
-- Enable/disable anti-flicker
-- Set filtering mode: BAND_PASS or BAND_STOP
-- Set frequency band (low_freq, high_freq in Hz)
-- Set duty cycle (percentage)
-- Get min/max supported frequencies
-
-**Use Cases:**
-- Remove 50Hz/60Hz artificial light flicker
-- Clean indoor scenes with fluorescent lighting
-- Filter specific frequency bands
-- Improve data quality under AC lighting
-
-**Access:** `camera.get_device().get_facility<Metavision::I_AntiFlickerModule>()`
-
----
-
-### 5. Hardware Monitoring - I_Monitoring
-**Purpose:** Monitor sensor health and environmental conditions
-
-**Features:**
-- Get temperature (°C)
-- Get illumination (lux)
-- Get pixel dead time (refractory period in microseconds)
-
-**Use Cases:**
-- Monitor sensor temperature for overheating
-- Check lighting conditions
-- Verify refractory period settings
-- Debug hardware issues
-
-**Access:** `camera.get_device().get_facility<Metavision::I_Monitoring>()`
-
----
-
-### 6. Digital Crop - I_DigitalCrop
-**Purpose:** Crop the sensor output to a smaller resolution
-
-**Features:**
-- Set cropping region
-- Enable/disable crop
-- Get cropped geometry
-
-**Use Cases:**
-- Reduce data volume
-- Focus on specific sensor area
-- Improve processing speed
-
-**Access:** `camera.get_device().get_facility<Metavision::I_DigitalCrop>()`
-
----
-
-### 7. Trigger In/Out - I_TriggerIn / I_TriggerOut
+### 1. Trigger In/Out - I_TriggerIn / I_TriggerOut
 **Purpose:** Synchronize camera with external signals
 
 **Features:**
@@ -158,20 +73,22 @@ This document lists the camera features available in the Metavision SDK that cou
 
 ---
 
-## Recommended Priority for GUI Implementation
+## GUI Implementation Status
 
-### High Priority (Most Useful)
-1. **ROI (Region of Interest)** - Very useful for focusing on specific areas
-2. **Event Rate Controller (ERC)** - Important for high-speed scenes
-3. **Hardware Monitoring** - Temperature/illumination display
+### ✓ Implemented (High Priority)
+1. **ROI (Region of Interest)** ✓ - Very useful for focusing on specific areas
+2. **Event Rate Controller (ERC)** ✓ - Important for high-speed scenes
+3. **Hardware Monitoring** ✓ - Temperature/illumination display
 
-### Medium Priority
-4. **Anti-Flicker Module** - Useful for indoor environments
-5. **Event Trail Filter** - Good for noise reduction
+### ✓ Implemented (Medium Priority)
+4. **Anti-Flicker Module** ✓ - Useful for indoor environments
+5. **Event Trail Filter** ✓ - Good for noise reduction
 
-### Low Priority
-6. **Digital Crop** - Similar to ROI but less flexible
-7. **Trigger In/Out** - Advanced use cases only
+### ✓ Implemented (Low Priority)
+6. **Digital Crop** ✓ - Similar to ROI but less flexible
+
+### ⏳ Not Yet Implemented
+7. **Trigger In/Out** - Advanced use cases only (multi-camera sync)
 
 ---
 
