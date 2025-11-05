@@ -245,10 +245,29 @@ bool AppConfig::load(const std::string& filename) {
             else if (key == "pose_debug_interval") algorithm_settings_.pose_debug_interval = std::stoi(value);
             else if (key == "debug_match_limit") algorithm_settings_.debug_match_limit = std::stoi(value);
         }
+        else if (section == "GeneticAlgorithm") {
+            if (key == "population_size") ga_settings_.population_size = std::stoi(value);
+            else if (key == "num_generations") ga_settings_.num_generations = std::stoi(value);
+            else if (key == "mutation_rate") ga_settings_.mutation_rate = std::stof(value);
+            else if (key == "crossover_rate") ga_settings_.crossover_rate = std::stof(value);
+            else if (key == "frames_per_eval") ga_settings_.frames_per_eval = std::stoi(value);
+            else if (key == "optimize_bias_diff") ga_settings_.optimize_bias_diff = (std::stoi(value) != 0);
+            else if (key == "optimize_bias_refr") ga_settings_.optimize_bias_refr = (std::stoi(value) != 0);
+            else if (key == "optimize_bias_fo") ga_settings_.optimize_bias_fo = (std::stoi(value) != 0);
+            else if (key == "optimize_bias_hpf") ga_settings_.optimize_bias_hpf = (std::stoi(value) != 0);
+            else if (key == "optimize_bias_pr") ga_settings_.optimize_bias_pr = (std::stoi(value) != 0);
+            else if (key == "optimize_accumulation") ga_settings_.optimize_accumulation = (std::stoi(value) != 0);
+            else if (key == "optimize_trail_filter") ga_settings_.optimize_trail_filter = (std::stoi(value) != 0);
+            else if (key == "optimize_antiflicker") ga_settings_.optimize_antiflicker = (std::stoi(value) != 0);
+            else if (key == "optimize_erc") ga_settings_.optimize_erc = (std::stoi(value) != 0);
+        }
     }
 
     std::cout << "Configuration loaded from: " << filename << std::endl;
     std::cout << "  Camera bias settings loaded" << std::endl;
     std::cout << "  Frame accumulation time: " << camera_settings_.accumulation_time_s << "s" << std::endl;
+    std::cout << "  GA population size: " << ga_settings_.population_size << std::endl;
+    std::cout << "  GA generations: " << ga_settings_.num_generations << std::endl;
+
     return true;
 }

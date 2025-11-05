@@ -222,6 +222,26 @@ public:
         int debug_match_limit = 5;                                     // Maximum debug matches to log
     };
 
+    // Genetic Algorithm settings
+    struct GeneticAlgorithmSettings {
+        int population_size = 30;           // Number of genomes per generation
+        int num_generations = 20;           // Number of generations to evolve
+        float mutation_rate = 0.15f;        // Probability of mutating each gene
+        float crossover_rate = 0.7f;        // Probability of crossover vs cloning
+        int frames_per_eval = 30;           // Frames to capture per fitness evaluation
+
+        // Parameters to optimize (0=fixed, 1=optimize)
+        bool optimize_bias_diff = true;
+        bool optimize_bias_refr = true;
+        bool optimize_bias_fo = true;
+        bool optimize_bias_hpf = true;
+        bool optimize_bias_pr = true;
+        bool optimize_accumulation = true;
+        bool optimize_trail_filter = false;
+        bool optimize_antiflicker = false;
+        bool optimize_erc = false;
+    };
+
     AppConfig();
     ~AppConfig();
 
@@ -281,6 +301,9 @@ public:
     AlgorithmSettings& algorithm_settings() { return algorithm_settings_; }
     const AlgorithmSettings& algorithm_settings() const { return algorithm_settings_; }
 
+    GeneticAlgorithmSettings& ga_settings() { return ga_settings_; }
+    const GeneticAlgorithmSettings& ga_settings() const { return ga_settings_; }
+
 private:
     // Helper function to parse RGB color from "R, G, B" string
     cv::Scalar parse_rgb(const std::string& value);
@@ -302,4 +325,5 @@ private:
     RenderingEstimatedSettings rendering_estimated_;
     RenderingTextSettings rendering_text_;
     AlgorithmSettings algorithm_settings_;
+    GeneticAlgorithmSettings ga_settings_;
 };
