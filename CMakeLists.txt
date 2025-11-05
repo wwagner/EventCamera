@@ -68,6 +68,7 @@ add_executable(event_camera_viewer
     src/main.cpp
     src/camera_manager.cpp
     src/app_config.cpp
+    src/event_camera_genetic_optimizer.cpp
     ${IMGUI_SOURCES}
 )
 

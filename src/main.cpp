@@ -36,12 +36,13 @@
 // Local headers
 #include "camera_manager.h"
 #include "app_config.h"
+#include "event_camera_genetic_optimizer.h"
 
 // Global state
 std::atomic<bool> running{true};
 cv::Mat current_frame;
 std::mutex frame_mutex;
-std::mutex framegen_mutex;  // Protects frame_gen from race conditions
+std::mutex framegen_mutex;  // Protects camera_state.frame_gen from race conditions
 GLuint texture_id = 0;
 int image_width = 1280;
 int image_height = 720;
@@ -53,6 +54,31 @@ struct ROIVisualization {
     int x = 0, y = 0, width = 640, height = 360;
     std::mutex mutex;
 } roi_viz;
+
+// Genetic Optimizer state
+struct GAState {
+    std::unique_ptr<EventCameraGeneticOptimizer> optimizer;
+    std::unique_ptr<std::thread> optimizer_thread;
+    std::atomic<bool> running{false};
+    std::atomic<int> current_generation{0};
+    std::atomic<float> best_fitness{1e9f};
+    EventCameraGeneticOptimizer::Genome best_genome;
+    EventCameraGeneticOptimizer::FitnessResult best_result;
+    std::mutex mutex;
+
+    // Frames for fitness evaluation
+    std::vector<cv::Mat> captured_frames;
+    std::mutex frames_mutex;
+} ga_state;
+// Camera hotplug state
+struct CameraState {
+    std::unique_ptr<CameraManager> camera_mgr;
+    std::unique_ptr<Metavision::PeriodicFrameGenerationAlgorithm> frame_gen;
+    std::unique_ptr<std::thread> event_thread;
+    std::atomic<bool> camera_connected{false};
+    std::atomic<bool> simulation_mode{false};
+    std::mutex connection_mutex;
+} camera_state;
 
 /**
  * Create OpenGL texture from OpenCV Mat
@@ -161,6 +187,241 @@ void apply_bias_settings(Metavision::Camera& camera, const AppConfig::CameraSett
     }
 }
 
+// Bias range structure  
+struct BiasRange {
+    int min, max, current;
+};
+
+/**
+ * Attempt to connect to a camera (for hot-plug support)
+ */
+
+/**
+ * Fitness evaluation callback for genetic algorithm
+ * Applies genome parameters to camera and captures frames for evaluation
+ */
+EventCameraGeneticOptimizer::FitnessResult evaluate_genome_fitness(
+    const EventCameraGeneticOptimizer::Genome& genome,
+    AppConfig& config,
+    int num_frames = 30) {
+    
+    EventCameraGeneticOptimizer::FitnessResult result;
+    
+    // Apply genome parameters to camera (if connected)
+    if (camera_state.camera_connected && camera_state.camera_mgr) {
+        auto& cam_info = camera_state.camera_mgr->get_camera(0);
+        auto* i_ll_biases = cam_info.camera->get_device().get_facility<Metavision::I_LL_Biases>();
+        
+        if (i_ll_biases) {
+            try {
+                i_ll_biases->set("bias_diff", genome.bias_diff);
+                i_ll_biases->set("bias_refr", genome.bias_refr);
+                i_ll_biases->set("bias_fo", genome.bias_fo);
+                i_ll_biases->set("bias_hpf", genome.bias_hpf);
+                i_ll_biases->set("bias_pr", genome.bias_pr);
+            } catch (const std::exception& e) {
+                std::cerr << "Error applying biases: " << e.what() << std::endl;
+                result.combined_fitness = 1e9f;  // Very bad fitness
+                return result;
+            }
+        }
+        
+        // Update accumulation time
+        if (camera_state.frame_gen) {
+            const uint32_t accumulation_time_us = static_cast<uint32_t>(
+                genome.accumulation_time_s * 1000000);
+            
+            std::lock_guard<std::mutex> lock(framegen_mutex);
+            camera_state.frame_gen = std::make_unique<Metavision::PeriodicFrameGenerationAlgorithm>(
+                image_width, image_height, accumulation_time_us);
+            camera_state.frame_gen->set_output_callback([](const Metavision::timestamp, cv::Mat& frame) {
+                if (!frame.empty()) {
+                    update_texture(frame);
+                }
+            });
+        }
+        
+        // Apply other genome parameters (trail filter, antiflicker, ERC, etc.)
+        if (genome.enable_trail_filter) {
+            auto* trail_filter = cam_info.camera->get_device().get_facility<Metavision::I_EventTrailFilterModule>();
+            if (trail_filter) {
+                trail_filter->enable(true);
+                trail_filter->set_threshold(genome.trail_threshold_us);
+            }
+        }
+        
+        if (genome.enable_antiflicker) {
+            auto* antiflicker = cam_info.camera->get_device().get_facility<Metavision::I_AntiFlickerModule>();
+            if (antiflicker) {
+                antiflicker->enable(true);
+                antiflicker->set_frequency_band(genome.af_low_freq, genome.af_high_freq);
+            }
+        }
+        
+        if (genome.enable_erc) {
+            auto* erc = cam_info.camera->get_device().get_facility<Metavision::I_ErcModule>();
+            if (erc) {
+                erc->enable(true);
+                erc->set_cd_event_rate(genome.erc_target_rate);
+            }
+        }
+    }
+    
+    // Wait for parameters to stabilize
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    
+    // Capture frames
+    std::vector<cv::Mat> captured_frames;
+    captured_frames.reserve(num_frames);
+    
+    for (int i = 0; i < num_frames; ++i) {
+        cv::Mat captured_frame;
+        {
+            std::lock_guard<std::mutex> lock(frame_mutex);
+            if (!current_frame.empty()) {
+                captured_frame = current_frame.clone();
+            }
+        }
+        
+        if (!captured_frame.empty()) {
+            captured_frames.push_back(captured_frame);
+        }
+        
+        std::this_thread::sleep_for(std::chrono::milliseconds(33));  // ~30 FPS
+    }
+    
+    // Calculate fitness metrics from captured frames
+    if (captured_frames.empty()) {
+        result.combined_fitness = 1e9f;  // Very bad fitness
+        return result;
+    }
+    
+    float total_contrast = 0.0f;
+    float total_noise = 0.0f;
+    
+    for (const auto& frame : captured_frames) {
+        total_contrast += EventCameraGeneticOptimizer::calculate_contrast(frame);
+        total_noise += EventCameraGeneticOptimizer::calculate_noise(frame);
+    }
+    
+    result.contrast_score = total_contrast / captured_frames.size();
+    result.noise_metric = total_noise / captured_frames.size();
+    result.num_valid_frames = captured_frames.size();
+    
+    // Combined fitness: minimize (1/contrast + noise)
+    // We want high contrast and low noise
+    const float alpha = 0.5f;  // Weight for contrast
+    const float beta = 0.5f;   // Weight for noise
+    result.combined_fitness = alpha * (1.0f / (result.contrast_score + 1.0f)) + beta * result.noise_metric;
+    
+    return result;
+}
+
+
+/**
+ * Attempt to connect to a camera (for hot-plug support)
+ */
+bool try_connect_camera(AppConfig& config, std::map<std::string, BiasRange>& bias_ranges,
+                        const std::string& serial_hint = "") {
+    std::lock_guard<std::mutex> lock(camera_state.connection_mutex);
+    
+    if (camera_state.camera_connected) {
+        std::cout << "Camera already connected" << std::endl;
+        return true;
+    }
+    
+    std::cout << "Scanning for cameras..." << std::endl;
+    auto available_cameras = CameraManager::list_available_cameras();
+    
+    if (available_cameras.empty()) {
+        std::cout << "No cameras found" << std::endl;
+        return false;
+    }
+    
+    std::cout << "Found camera, attempting to connect..." << std::endl;
+    
+    // Stop simulation thread if running
+    if (camera_state.simulation_mode && camera_state.event_thread) {
+        running = false;
+        if (camera_state.event_thread->joinable()) {
+            camera_state.event_thread->join();
+        }
+        running = true;
+    }
+    
+    // Initialize camera manager
+    camera_state.camera_mgr = std::make_unique<CameraManager>();
+    int num_cameras = camera_state.camera_mgr->initialize(serial_hint);
+    
+    if (num_cameras == 0) {
+        std::cerr << "Failed to initialize camera" << std::endl;
+        camera_state.camera_mgr = nullptr;
+        return false;
+    }
+    
+    auto& cam_info = camera_state.camera_mgr->get_camera(0);
+    image_width = cam_info.width;
+    image_height = cam_info.height;
+    
+    // Query bias ranges from newly connected camera
+    bias_ranges.clear();
+    auto* i_ll_biases = cam_info.camera->get_device().get_facility<Metavision::I_LL_Biases>();
+    if (i_ll_biases) {
+        for (const auto& name : {"bias_diff", "bias_refr", "bias_fo", "bias_hpf", "bias_pr"}) {
+            try {
+                Metavision::LL_Bias_Info info;
+                if (i_ll_biases->get_bias_info(name, info)) {
+                    auto range = info.get_bias_range();
+                    int current = i_ll_biases->get(name);
+                    bias_ranges[name] = {range.first, range.second, current};
+                }
+            } catch (...) {
+                // Bias not available on this camera
+            }
+        }
+    }
+    
+    // Create frame generator
+    const uint32_t accumulation_time_us = static_cast<uint32_t>(
+        config.camera_settings().accumulation_time_s * 1000000);
+    
+    camera_state.frame_gen = std::make_unique<Metavision::PeriodicFrameGenerationAlgorithm>(
+        image_width, image_height, accumulation_time_us);
+    
+    camera_state.frame_gen->set_output_callback([](const Metavision::timestamp, cv::Mat& frame) {
+        if (!frame.empty()) {
+            update_texture(frame);
+        }
+    });
+    
+    // Start camera
+    cam_info.camera->start();
+    std::cout << "Camera started: " << cam_info.serial << std::endl;
+    
+    // Start camera event thread
+    camera_state.event_thread = std::make_unique<std::thread>([&]() {
+        auto& cam_info = camera_state.camera_mgr->get_camera(0);
+        auto& camera = cam_info.camera;
+        
+        camera->cd().add_callback([&](const Metavision::EventCD* begin,
+                                     const Metavision::EventCD* end) {
+            std::lock_guard<std::mutex> lock(framegen_mutex);
+            if (camera_state.frame_gen) {
+                camera_state.frame_gen->process_events(begin, end);
+            }
+        });
+        
+        while (running && camera->is_running()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    });
+    
+    camera_state.camera_connected = true;
+    camera_state.simulation_mode = false;
+    
+    return true;
+}
+
 /**
  * Main application
  */
@@ -174,46 +435,50 @@ int main(int argc, char* argv[]) {
         std::cerr << "Warning: Could not load config file, using defaults" << std::endl;
     }
 
+    // Camera/Simulation Mode
+
     // List available cameras
     std::cout << "\nScanning for event cameras..." << std::endl;
     auto available_cameras = CameraManager::list_available_cameras();
 
     if (available_cameras.empty()) {
-        std::cerr << "ERROR: No event cameras found!" << std::endl;
-        std::cerr << "Please ensure camera is connected via USB." << std::endl;
-        return -1;
+        std::cout << "No event cameras found - starting in SIMULATION MODE" << std::endl;
+        std::cout << "You can connect a camera later using the 'Connect Camera' button" << std::endl;
+        camera_state.simulation_mode = true;
+        image_width = 1280;
+        image_height = 720;
+    } else {
+        std::cout << "Found " << available_cameras.size() << " camera(s):" << std::endl;
+        for (size_t i = 0; i < available_cameras.size(); ++i) {
+            std::cout << "  [" << i << "] " << available_cameras[i] << std::endl;
+        }
+
+        // Initialize camera manager
+        camera_state.camera_mgr = std::make_unique<CameraManager>();
+        std::string serial1 = available_cameras[0];  // Use first camera
+        int num_cameras = camera_state.camera_mgr->initialize(serial1);
+
+        if (num_cameras == 0) {
+            std::cerr << "ERROR: Failed to initialize camera - starting in SIMULATION MODE" << std::endl;
+            camera_state.simulation_mode = true;
+            camera_state.camera_mgr = nullptr;
+            image_width = 1280;
+            image_height = 720;
+        } else {
+            std::cout << "\nInitialized " << num_cameras << " camera(s)" << std::endl;
+            camera_state.camera_connected = true;
+
+            // Get camera info
+            auto& cam_info = camera_state.camera_mgr->get_camera(0);
+            image_width = cam_info.width;
+            image_height = cam_info.height;
+
+            std::cout << "Camera: " << cam_info.serial << std::endl;
+            std::cout << "Resolution: " << image_width << "x" << image_height << std::endl;
+        }
     }
 
-    std::cout << "Found " << available_cameras.size() << " camera(s):" << std::endl;
-    for (size_t i = 0; i < available_cameras.size(); ++i) {
-        std::cout << "  [" << i << "] " << available_cameras[i] << std::endl;
-    }
-
-    // Initialize camera manager
-    CameraManager camera_mgr;
-    std::string serial1 = available_cameras[0];  // Use first camera
-    int num_cameras = camera_mgr.initialize(serial1);
-
-    if (num_cameras == 0) {
-        std::cerr << "ERROR: Failed to initialize camera" << std::endl;
-        return -1;
-    }
-
-    std::cout << "\nInitialized " << num_cameras << " camera(s)" << std::endl;
-
-    // Get camera info
-    auto& cam_info = camera_mgr.get_camera(0);
-    image_width = cam_info.width;
-    image_height = cam_info.height;
-
-    std::cout << "Camera: " << cam_info.serial << std::endl;
-    std::cout << "Resolution: " << image_width << "x" << image_height << std::endl;
-
-    std::cout << "\nDebug: About to apply bias settings..." << std::endl;
     // Query bias ranges from camera and initialize settings
-    struct BiasRange {
-        int min, max, current;
-    };
     std::map<std::string, BiasRange> bias_ranges;
 
     // Check which monitoring features are supported
@@ -223,7 +488,11 @@ int main(int argc, char* argv[]) {
         bool has_dead_time = false;
     } monitoring_caps;
 
-    auto* i_ll_biases = cam_info.camera->get_device().get_facility<Metavision::I_LL_Biases>();
+    // Only query camera settings if we have a real camera
+    if (camera_state.camera_connected) {
+        std::cout << "\nDebug: Querying bias settings from camera..." << std::endl;
+        auto& cam_info = camera_state.camera_mgr->get_camera(0);
+        auto* i_ll_biases = cam_info.camera->get_device().get_facility<Metavision::I_LL_Biases>();
     if (i_ll_biases) {
         std::vector<std::string> bias_names = {"bias_diff", "bias_refr", "bias_fo", "bias_hpf", "bias_pr"};
         for (const auto& name : bias_names) {
@@ -297,24 +566,38 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    std::cout << "Debug: About to create frame generation algorithm..." << std::endl;
-    // Create frame generation algorithm
-    const uint32_t accumulation_time_us = static_cast<uint32_t>(
-        config.camera_settings().accumulation_time_s * 1000000);
+        std::cout << "Debug: Camera initialization complete!" << std::endl;
+    } else {
+        // Simulation mode - use default bias ranges
+        bias_ranges["bias_diff"] = {-25, 23, 0};
+        bias_ranges["bias_refr"] = {-25, 23, 0};
+        bias_ranges["bias_fo"] = {-25, 23, 0};
+        bias_ranges["bias_hpf"] = {-25, 23, 0};
+        bias_ranges["bias_pr"] = {-25, 23, 0};
+        std::cout << "Simulation mode: using default bias ranges" << std::endl;
+    }
 
-    auto frame_gen = std::make_unique<Metavision::PeriodicFrameGenerationAlgorithm>(
-        image_width, image_height, accumulation_time_us);
-    std::cout << "Debug: Frame generation algorithm created" << std::endl;
+    // Create frame generation algorithm (used in camera mode only)
 
-    std::cout << "Frame accumulation time: " << config.camera_settings().accumulation_time_s
-              << "s (" << accumulation_time_us << " us)" << std::endl;
+    if (camera_state.camera_connected) {
+        std::cout << "Debug: About to create frame generation algorithm..." << std::endl;
+        const uint32_t accumulation_time_us = static_cast<uint32_t>(
+            config.camera_settings().accumulation_time_s * 1000000);
 
-    // Set up frame callback
-    frame_gen->set_output_callback([](const Metavision::timestamp, cv::Mat& frame) {
-        if (!frame.empty()) {
-            update_texture(frame);
-        }
-    });
+        camera_state.frame_gen = std::make_unique<Metavision::PeriodicFrameGenerationAlgorithm>(
+            image_width, image_height, accumulation_time_us);
+        std::cout << "Debug: Frame generation algorithm created" << std::endl;
+
+        std::cout << "Frame accumulation time: " << config.camera_settings().accumulation_time_s
+                  << "s (" << accumulation_time_us << " us)" << std::endl;
+
+        // Set up frame callback
+        camera_state.frame_gen->set_output_callback([](const Metavision::timestamp, cv::Mat& frame) {
+            if (!frame.empty()) {
+                update_texture(frame);
+            }
+        });
+    }
 
     // Initialize GLFW
     if (!glfwInit()) {
@@ -356,29 +639,83 @@ int main(int argc, char* argv[]) {
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init(glsl_version);
 
-    std::cout << "\nStarting camera..." << std::endl;
-    cam_info.camera->start();
-    std::cout << "Camera started successfully!" << std::endl;
-    std::cout << "\nPress ESC or close window to exit\n" << std::endl;
+    // Start camera or simulation
+    if (camera_state.camera_connected) {
+        std::cout << "\nStarting camera..." << std::endl;
+        auto& cam_info = camera_state.camera_mgr->get_camera(0);
+        cam_info.camera->start();
+        std::cout << "Camera started successfully!" << std::endl;
+        std::cout << "\nPress ESC or close window to exit\n" << std::endl;
 
-    // Camera event processing thread
-    std::thread event_thread([&]() {
-        auto& camera = cam_info.camera;
+        // Camera event processing thread
+        camera_state.event_thread = std::make_unique<std::thread>([&]() {
+            auto& cam_info = camera_state.camera_mgr->get_camera(0);
+            auto& camera = cam_info.camera;
 
         // Set up event callback
         camera->cd().add_callback([&](const Metavision::EventCD* begin,
                                      const Metavision::EventCD* end) {
             std::lock_guard<std::mutex> lock(framegen_mutex);
-            if (frame_gen) {
-                frame_gen->process_events(begin, end);
+            if (camera_state.frame_gen) {
+                camera_state.frame_gen->process_events(begin, end);
             }
         });
 
-        // Process events while running
-        while (running && camera->is_running()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        }
-    });
+            // Process events while running
+            while (running && camera->is_running()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+        });
+    } else {
+        // Simulation mode - generate synthetic frames
+        std::cout << "\nStarting SIMULATION mode..." << std::endl;
+        std::cout << "Generating synthetic event camera frames" << std::endl;
+        std::cout << "\nPress ESC or close window to exit\n" << std::endl;
+
+        camera_state.event_thread = std::make_unique<std::thread>([&]() {
+            std::random_device rd;
+            std::mt19937 gen(rd());
+            std::uniform_int_distribution<> noise_dist(0, 255);
+            std::normal_distribution<float> motion_dist(0.0f, 2.0f);
+
+            float phase = 0.0f;
+
+            while (running) {
+                // Generate synthetic frame with some motion/patterns
+                cv::Mat sim_frame(image_height, image_width, CV_8UC3);
+
+                // Create interesting patterns that change over time
+                for (int y = 0; y < image_height; ++y) {
+                    for (int x = 0; x < image_width; ++x) {
+                        float fx = static_cast<float>(x) / image_width;
+                        float fy = static_cast<float>(y) / image_height;
+
+                        // Animated diagonal stripes
+                        float value = (std::sin((fx + fy + phase) * 10.0f) + 1.0f) * 0.5f;
+
+                        // Add some noise for "event" effect
+                        value += noise_dist(gen) / 1000.0f;
+
+                        uint8_t intensity = static_cast<uint8_t>(value * 255);
+                        sim_frame.at<cv::Vec3b>(y, x) = cv::Vec3b(intensity, intensity, intensity);
+                    }
+                }
+
+                // Add some moving circles to simulate objects
+                int cx = static_cast<int>((std::sin(phase * 2.0f) * 0.3f + 0.5f) * image_width);
+                int cy = static_cast<int>((std::cos(phase * 1.5f) * 0.3f + 0.5f) * image_height);
+                cv::circle(sim_frame, cv::Point(cx, cy), 50, cv::Scalar(255, 255, 255), -1);
+
+                phase += 0.02f;
+
+                // Update the frame
+                update_texture(sim_frame);
+
+                // Sleep to simulate frame rate
+                std::this_thread::sleep_for(std::chrono::milliseconds(33));  // ~30 FPS
+            }
+        });
+    }
 
     // Track if settings changed
     bool settings_changed = false;
@@ -403,7 +740,24 @@ int main(int argc, char* argv[]) {
         ImGui::SetNextWindowSize(ImVec2(420, 850), ImGuiCond_FirstUseEver);
 
         if (ImGui::Begin("Camera Settings")) {
-            ImGui::Text("Camera: %s", cam_info.serial.c_str());
+            // Get camera info if connected
+            CameraManager::CameraInfo* cam_info_ptr = nullptr;
+            if (camera_state.camera_connected && camera_state.camera_mgr) {
+                cam_info_ptr = &camera_state.camera_mgr->get_camera(0);
+            }
+
+            if (camera_state.camera_connected && cam_info_ptr) {
+                ImGui::Text("Camera: %s", cam_info_ptr->serial.c_str());
+            } else {
+                ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "Mode: SIMULATION");
+                if (ImGui::Button("Connect Camera")) {
+                    if (try_connect_camera(config, bias_ranges)) {
+                        std::cout << "Successfully connected to camera!" << std::endl;
+                    } else {
+                        std::cout << "No cameras found or connection failed" << std::endl;
+                    }
+                }
+            }
             ImGui::Text("Resolution: %dx%d", image_width, image_height);
             ImGui::Text("FPS: %.1f", io.Framerate);
             ImGui::Separator();
@@ -476,7 +830,9 @@ int main(int argc, char* argv[]) {
                 ImGui::TextColored(ImVec4(1, 1, 0, 1), "Settings changed!");
                 if (ImGui::Button("Apply Settings", ImVec2(-1, 0))) {
                     // Apply bias settings
-                    apply_bias_settings(*cam_info.camera, cam_settings);
+                    if (camera_state.camera_connected && cam_info_ptr) {
+                        apply_bias_settings(*cam_info_ptr->camera, cam_settings);
+                    }
 
                     // Update frame generation if accumulation time changed
                     if (cam_settings.accumulation_time_s != previous_settings.accumulation_time_s) {
@@ -491,9 +847,9 @@ int main(int argc, char* argv[]) {
                             std::lock_guard<std::mutex> lock(framegen_mutex);
 
                             // Recreate frame generator with new timing
-                            frame_gen = std::make_unique<Metavision::PeriodicFrameGenerationAlgorithm>(
+                            camera_state.frame_gen = std::make_unique<Metavision::PeriodicFrameGenerationAlgorithm>(
                                 image_width, image_height, new_time_us);
-                            frame_gen->set_output_callback([](const Metavision::timestamp, cv::Mat& frame) {
+                            camera_state.frame_gen->set_output_callback([](const Metavision::timestamp, cv::Mat& frame) {
                                 if (!frame.empty()) {
                                     update_texture(frame);
                                 }
@@ -533,7 +889,10 @@ int main(int argc, char* argv[]) {
             ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "Advanced Features");
 
             // Hardware Monitoring
-            auto* monitoring = cam_info.camera->get_device().get_facility<Metavision::I_Monitoring>();
+            Metavision::I_Monitoring* monitoring = nullptr;
+            if (camera_state.camera_connected && cam_info_ptr) {
+                monitoring = cam_info_ptr->camera->get_device().get_facility<Metavision::I_Monitoring>();
+            }
             if (monitoring && (monitoring_caps.has_temperature || monitoring_caps.has_illumination || monitoring_caps.has_dead_time)) {
                 if (ImGui::CollapsingHeader("Hardware Monitoring", ImGuiTreeNodeFlags_DefaultOpen)) {
                     if (monitoring_caps.has_temperature) {
@@ -574,7 +933,10 @@ int main(int argc, char* argv[]) {
             }
 
             // ROI (Region of Interest)
-            auto* roi = cam_info.camera->get_device().get_facility<Metavision::I_ROI>();
+            Metavision::I_ROI* roi = nullptr;
+            if (camera_state.camera_connected && cam_info_ptr) {
+                roi = cam_info_ptr->camera->get_device().get_facility<Metavision::I_ROI>();
+            }
             if (roi) {
                 if (ImGui::CollapsingHeader("Region of Interest (ROI)")) {
                     static bool roi_enabled = false;
@@ -656,7 +1018,10 @@ int main(int argc, char* argv[]) {
             }
 
             // ERC (Event Rate Controller)
-            auto* erc = cam_info.camera->get_device().get_facility<Metavision::I_ErcModule>();
+            Metavision::I_ErcModule* erc = nullptr;
+            if (camera_state.camera_connected && cam_info_ptr) {
+                erc = cam_info_ptr->camera->get_device().get_facility<Metavision::I_ErcModule>();
+            }
             if (erc) {
                 if (ImGui::CollapsingHeader("Event Rate Controller (ERC)")) {
                     static bool erc_enabled = false;
@@ -689,7 +1054,10 @@ int main(int argc, char* argv[]) {
             }
 
             // Anti-Flicker Module
-            auto* antiflicker = cam_info.camera->get_device().get_facility<Metavision::I_AntiFlickerModule>();
+            Metavision::I_AntiFlickerModule* antiflicker = nullptr;
+            if (camera_state.camera_connected && cam_info_ptr) {
+                antiflicker = cam_info_ptr->camera->get_device().get_facility<Metavision::I_AntiFlickerModule>();
+            }
             if (antiflicker) {
                 if (ImGui::CollapsingHeader("Anti-Flicker Filter")) {
                     static bool af_enabled = false;
@@ -806,7 +1174,10 @@ int main(int argc, char* argv[]) {
             }
 
             // Event Trail Filter Module
-            auto* trail_filter = cam_info.camera->get_device().get_facility<Metavision::I_EventTrailFilterModule>();
+            Metavision::I_EventTrailFilterModule* trail_filter = nullptr;
+            if (camera_state.camera_connected && cam_info_ptr) {
+                trail_filter = cam_info_ptr->camera->get_device().get_facility<Metavision::I_EventTrailFilterModule>();
+            }
             if (trail_filter) {
                 if (ImGui::CollapsingHeader("Event Trail Filter")) {
                     static bool etf_enabled = false;
@@ -877,7 +1248,10 @@ int main(int argc, char* argv[]) {
             }
 
             // Digital Crop Module
-            auto* digital_crop = cam_info.camera->get_device().get_facility<Metavision::I_DigitalCrop>();
+            Metavision::I_DigitalCrop* digital_crop = nullptr;
+            if (camera_state.camera_connected && cam_info_ptr) {
+                digital_crop = cam_info_ptr->camera->get_device().get_facility<Metavision::I_DigitalCrop>();
+            }
             if (digital_crop) {
                 if (ImGui::CollapsingHeader("Digital Crop")) {
                     static bool dc_enabled = false;
@@ -984,14 +1358,17 @@ int main(int argc, char* argv[]) {
     std::cout << "\nShutting down..." << std::endl;
     running = false;
 
-    // Stop camera
-    if (cam_info.camera && cam_info.camera->is_running()) {
-        cam_info.camera->stop();
+    // Stop camera if connected
+    if (camera_state.camera_connected && camera_state.camera_mgr) {
+        auto& cam_info = camera_state.camera_mgr->get_camera(0);
+        if (cam_info.camera && cam_info.camera->is_running()) {
+            cam_info.camera->stop();
+        }
     }
 
     // Wait for event thread
-    if (event_thread.joinable()) {
-        event_thread.join();
+    if (camera_state.event_thread && camera_state.event_thread->joinable()) {
+        camera_state.event_thread->join();
     }
 
     // Cleanup ImGui
