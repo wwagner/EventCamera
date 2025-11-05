@@ -33,7 +33,6 @@ public:
         int bias_refr = 128;        // Refractory period (0-255)
         int bias_fo = 128;          // Photoreceptor follower (0-255)
         int bias_hpf = 128;         // High-pass filter (0-255)
-        int bias_pr = 128;          // Pixel photoreceptor (0-255)
         float accumulation_time_s = 0.01f;  // Event accumulation period (0.001-0.05 seconds)
     };
 
@@ -235,7 +234,6 @@ public:
         bool optimize_bias_refr = true;
         bool optimize_bias_fo = true;
         bool optimize_bias_hpf = true;
-        bool optimize_bias_pr = true;
         bool optimize_accumulation = true;
         bool optimize_trail_filter = false;
         bool optimize_antiflicker = false;

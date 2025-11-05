@@ -27,12 +27,11 @@ public:
      * Parameter genome - encodes all optimizable event camera parameters
      */
     struct Genome {
-        // Camera Biases (5 params) - ranges will be set from actual hardware
+        // Camera Biases (4 params) - ranges will be set from actual hardware
         int bias_diff;              // Event detection threshold
         int bias_refr;              // Refractory period
         int bias_fo;                // Photoreceptor follower
         int bias_hpf;               // High-pass filter
-        int bias_pr;                // Pixel photoreceptor
 
         // Frame Generation (1 param)
         float accumulation_time_s;  // 0.001-0.1 seconds
@@ -84,12 +83,15 @@ public:
         float mean_brightness;      // Average frame brightness
         float event_rate_avg;       // Average event rate (kev/s)
         float event_rate_std;       // Event rate stability
+        float isolated_pixel_ratio; // Ratio of isolated pixels (bad noise)
+        int total_event_pixels;     // Total number of bright pixels (events)
 
         FitnessResult() : contrast_score(0.0f), noise_metric(1e6f),
                          combined_fitness(1e6f), num_valid_frames(0),
                          total_frames(0), temporal_variance(1e6f),
                          spatial_noise(1e6f), mean_brightness(0.0f),
-                         event_rate_avg(0.0f), event_rate_std(1e6f) {}
+                         event_rate_avg(0.0f), event_rate_std(1e6f),
+                         isolated_pixel_ratio(1e6f), total_event_pixels(0) {}
     };
 
     /**
@@ -116,13 +118,18 @@ public:
         int population_size = 30;           // Number of genomes per generation
         int num_generations = 50;           // Number of generations to evolve
         float mutation_rate = 0.15f;        // Probability of mutating each gene
-        float mutation_strength = 0.2f;     // Magnitude of mutations (fraction of range)
+        float mutation_strength = 0.5f;     // Magnitude of mutations (fraction of range) - INCREASED for faster convergence
         float crossover_rate = 0.7f;        // Probability of crossover vs cloning
         float elite_fraction = 0.1f;        // Fraction of top performers to preserve
 
         // Fitness weights
         float alpha = 1.0f;                 // Weight for contrast (want high contrast)
         float beta = 0.5f;                  // Weight for noise (want low noise)
+        float gamma = 2.0f;                 // Weight for isolated pixels (want clusters, not noise)
+
+        // Event count constraint
+        int minimum_event_pixels = 500;     // Minimum bright pixels required (23 dots × ~25-50 px each)
+        float delta = 5.0f;                 // Penalty weight for insufficient events
 
         // Stopping criteria
         float target_fitness = 0.01f;       // Stop if fitness below this
@@ -204,6 +211,12 @@ public:
      * Calculate spatial noise within a frame
      */
     static float calculate_spatial_noise(const cv::Mat& frame);
+
+    /**
+     * Calculate ratio of isolated pixels (single-pixel noise) vs clustered pixels
+     * Returns value between 0.0 (all clustered) and 1.0 (all isolated)
+     */
+    static float calculate_isolated_pixels(const cv::Mat& frame);
 
 private:
     OptimizerParams params_;

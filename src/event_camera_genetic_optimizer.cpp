@@ -19,7 +19,6 @@ EventCameraGeneticOptimizer::Genome::Genome() {
     bias_refr = 0;
     bias_fo = 0;
     bias_hpf = 0;
-    bias_pr = 0;
     accumulation_time_s = 0.01f;
     enable_trail_filter = false;
     trail_threshold_us = 10000;
@@ -36,13 +35,11 @@ void EventCameraGeneticOptimizer::Genome::randomize(mt19937& rng) {
     uniform_int_distribution<int> refr_dist(ranges.refr_min, ranges.refr_max);
     uniform_int_distribution<int> fo_dist(ranges.fo_min, ranges.fo_max);
     uniform_int_distribution<int> hpf_dist(ranges.hpf_min, ranges.hpf_max);
-    uniform_int_distribution<int> pr_dist(ranges.pr_min, ranges.pr_max);
 
     bias_diff = diff_dist(rng);
     bias_refr = refr_dist(rng);
     bias_fo = fo_dist(rng);
     bias_hpf = hpf_dist(rng);
-    bias_pr = pr_dist(rng);
 
     // Randomize accumulation time (log-scale for better distribution)
     uniform_real_distribution<float> log_accum_dist(log(0.001f), log(0.1f));
@@ -74,7 +71,6 @@ void EventCameraGeneticOptimizer::Genome::clamp() {
     bias_refr = max(ranges.refr_min, min(ranges.refr_max, bias_refr));
     bias_fo = max(ranges.fo_min, min(ranges.fo_max, bias_fo));
     bias_hpf = max(ranges.hpf_min, min(ranges.hpf_max, bias_hpf));
-    bias_pr = max(ranges.pr_min, min(ranges.pr_max, bias_pr));
 
     // Clamp accumulation time
     accumulation_time_s = max(0.001f, min(0.1f, accumulation_time_s));
@@ -231,8 +227,18 @@ EventCameraGeneticOptimizer::evaluate_fitness(const Genome& genome) {
 
     // Calculate combined fitness
     if (result.contrast_score > 0.0f) {
+        // Calculate event count penalty (penalize if too few events)
+        float event_penalty = 0.0f;
+        if (result.total_event_pixels < params_.minimum_event_pixels) {
+            float deficit_ratio = static_cast<float>(params_.minimum_event_pixels - result.total_event_pixels)
+                                / static_cast<float>(params_.minimum_event_pixels);
+            event_penalty = params_.delta * deficit_ratio;
+        }
+
         result.combined_fitness = params_.alpha * (1.0f / result.contrast_score)
-                                + params_.beta * result.noise_metric;
+                                + params_.beta * result.noise_metric
+                                + params_.gamma * result.isolated_pixel_ratio
+                                + event_penalty;
     } else {
         result.combined_fitness = 1e9f;  // Invalid
     }
@@ -320,7 +326,6 @@ EventCameraGeneticOptimizer::crossover(const Genome& parent1, const Genome& pare
     offspring.bias_refr = coin_flip(rng_) ? parent1.bias_refr : parent2.bias_refr;
     offspring.bias_fo = coin_flip(rng_) ? parent1.bias_fo : parent2.bias_fo;
     offspring.bias_hpf = coin_flip(rng_) ? parent1.bias_hpf : parent2.bias_hpf;
-    offspring.bias_pr = coin_flip(rng_) ? parent1.bias_pr : parent2.bias_pr;
 
     offspring.accumulation_time_s = coin_flip(rng_) ?
         parent1.accumulation_time_s : parent2.accumulation_time_s;
@@ -368,11 +373,6 @@ void EventCameraGeneticOptimizer::mutate(Genome& genome) {
         int range = genome.ranges.hpf_max - genome.ranges.hpf_min;
         normal_distribution<float> noise(0.0f, params_.mutation_strength * range);
         genome.bias_hpf += static_cast<int>(noise(rng_));
-    }
-    if (mutate_dist(rng_)) {
-        int range = genome.ranges.pr_max - genome.ranges.pr_min;
-        normal_distribution<float> noise(0.0f, params_.mutation_strength * range);
-        genome.bias_pr += static_cast<int>(noise(rng_));
     }
 
     // Mutate accumulation time (log-space)
@@ -471,7 +471,6 @@ void EventCameraGeneticOptimizer::save_genome_to_ini(const Genome& genome,
     file << "bias_refr = " << genome.bias_refr << endl;
     file << "bias_fo = " << genome.bias_fo << endl;
     file << "bias_hpf = " << genome.bias_hpf << endl;
-    file << "bias_pr = " << genome.bias_pr << endl;
     file << "accumulation_time_s = " << genome.accumulation_time_s << endl;
     file << endl;
 
@@ -566,4 +565,39 @@ float EventCameraGeneticOptimizer::calculate_spatial_noise(const cv::Mat& frame)
 
     // Lower variance in Laplacian = less noise
     return static_cast<float>(stddev[0]);
+}
+
+float EventCameraGeneticOptimizer::calculate_isolated_pixels(const cv::Mat& frame) {
+    if (frame.empty()) return 1e6f;
+
+    // Convert to grayscale if needed
+    cv::Mat gray;
+    if (frame.channels() == 3) {
+        cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
+    } else {
+        gray = frame;
+    }
+
+    // Threshold to find bright pixels (events)
+    cv::Mat binary;
+    cv::threshold(gray, binary, 10, 255, cv::THRESH_BINARY);
+
+    // Count active pixels before erosion
+    int pixels_before = cv::countNonZero(binary);
+    if (pixels_before == 0) return 0.0f;  // No events, good
+
+    // Erode to remove isolated single pixels
+    cv::Mat eroded;
+    cv::Mat kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3));
+    cv::erode(binary, eroded, kernel);
+
+    // Count active pixels after erosion (these are clustered)
+    int pixels_after = cv::countNonZero(eroded);
+
+    // Calculate ratio of isolated pixels (removed by erosion)
+    int isolated_pixels = pixels_before - pixels_after;
+    float isolated_ratio = static_cast<float>(isolated_pixels) / static_cast<float>(pixels_before);
+
+    // Return ratio: 0.0 = all clustered (good), 1.0 = all isolated (bad)
+    return isolated_ratio;
 }

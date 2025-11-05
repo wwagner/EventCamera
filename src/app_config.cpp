@@ -85,7 +85,6 @@ bool AppConfig::load(const std::string& filename) {
             else if (key == "bias_refr") camera_settings_.bias_refr = std::stoi(value);
             else if (key == "bias_fo") camera_settings_.bias_fo = std::stoi(value);
             else if (key == "bias_hpf") camera_settings_.bias_hpf = std::stoi(value);
-            else if (key == "bias_pr") camera_settings_.bias_pr = std::stoi(value);
             else if (key == "accumulation_time_s") camera_settings_.accumulation_time_s = std::stof(value);
             // Backward compatibility: convert microseconds to seconds if old key is used
             else if (key == "accumulation_time_us") camera_settings_.accumulation_time_s = std::stof(value) / 1000000.0f;
@@ -255,7 +254,6 @@ bool AppConfig::load(const std::string& filename) {
             else if (key == "optimize_bias_refr") ga_settings_.optimize_bias_refr = (std::stoi(value) != 0);
             else if (key == "optimize_bias_fo") ga_settings_.optimize_bias_fo = (std::stoi(value) != 0);
             else if (key == "optimize_bias_hpf") ga_settings_.optimize_bias_hpf = (std::stoi(value) != 0);
-            else if (key == "optimize_bias_pr") ga_settings_.optimize_bias_pr = (std::stoi(value) != 0);
             else if (key == "optimize_accumulation") ga_settings_.optimize_accumulation = (std::stoi(value) != 0);
             else if (key == "optimize_trail_filter") ga_settings_.optimize_trail_filter = (std::stoi(value) != 0);
             else if (key == "optimize_antiflicker") ga_settings_.optimize_antiflicker = (std::stoi(value) != 0);

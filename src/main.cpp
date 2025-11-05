@@ -228,13 +228,6 @@ void apply_bias_settings(Metavision::Camera& camera, const AppConfig::CameraSett
             std::cerr << "  Warning: Could not set bias_hpf: " << e.what() << std::endl;
         }
 
-        try {
-            i_ll_biases->set("bias_pr", settings.bias_pr);
-            std::cout << "  bias_pr=" << settings.bias_pr << std::endl;
-        } catch (const std::exception& e) {
-            // Silently ignore bias_pr errors as many cameras don't support it
-        }
-
         std::cout << "Camera biases applied successfully" << std::endl;
     }
 }
@@ -270,13 +263,6 @@ EventCameraGeneticOptimizer::FitnessResult evaluate_genome_fitness(
                 i_ll_biases->set("bias_refr", genome.bias_refr);
                 i_ll_biases->set("bias_fo", genome.bias_fo);
                 i_ll_biases->set("bias_hpf", genome.bias_hpf);
-
-                // Try to set bias_pr, but don't fail if unsupported
-                try {
-                    i_ll_biases->set("bias_pr", genome.bias_pr);
-                } catch (const std::exception&) {
-                    // Silently ignore - bias_pr not supported on all cameras
-                }
             } catch (const std::exception& e) {
                 std::cerr << "Error applying biases: " << e.what() << std::endl;
                 result.combined_fitness = 1e9f;  // Very bad fitness
@@ -325,8 +311,8 @@ EventCameraGeneticOptimizer::FitnessResult evaluate_genome_fitness(
         }
     }
     
-    // Wait for parameters to stabilize
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    // Wait for parameters to stabilize (reduced for faster GA)
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
     
     // Capture frames
     std::vector<cv::Mat> captured_frames;
@@ -344,8 +330,8 @@ EventCameraGeneticOptimizer::FitnessResult evaluate_genome_fitness(
         if (!captured_frame.empty()) {
             captured_frames.push_back(captured_frame);
         }
-        
-        std::this_thread::sleep_for(std::chrono::milliseconds(33));  // ~30 FPS
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));  // Fast frame capture for GA
     }
     
     // Calculate fitness metrics from captured frames
@@ -368,6 +354,20 @@ EventCameraGeneticOptimizer::FitnessResult evaluate_genome_fitness(
     result.temporal_variance = EventCameraGeneticOptimizer::calculate_temporal_variance(captured_frames);
     result.spatial_noise = EventCameraGeneticOptimizer::calculate_spatial_noise(captured_frames[0]);
     result.noise_metric = result.temporal_variance + result.spatial_noise;
+
+    // Calculate isolated pixel ratio (single-pixel noise)
+    result.isolated_pixel_ratio = EventCameraGeneticOptimizer::calculate_isolated_pixels(captured_frames[0]);
+
+    // Calculate total event pixels (bright pixels above threshold)
+    cv::Mat gray;
+    if (captured_frames[0].channels() == 3) {
+        cv::cvtColor(captured_frames[0], gray, cv::COLOR_BGR2GRAY);
+    } else {
+        gray = captured_frames[0];
+    }
+    cv::Mat binary;
+    cv::threshold(gray, binary, 10, 255, cv::THRESH_BINARY);
+    result.total_event_pixels = cv::countNonZero(binary);
 
     // Calculate mean brightness
     cv::Scalar mean_val = cv::mean(captured_frames[0]);
@@ -429,7 +429,7 @@ bool try_connect_camera(AppConfig& config, std::map<std::string, BiasRange>& bia
     bias_ranges.clear();
     auto* i_ll_biases = cam_info.camera->get_device().get_facility<Metavision::I_LL_Biases>();
     if (i_ll_biases) {
-        for (const auto& name : {"bias_diff", "bias_refr", "bias_fo", "bias_hpf", "bias_pr"}) {
+        for (const auto& name : {"bias_diff", "bias_refr", "bias_fo", "bias_hpf"}) {
             try {
                 Metavision::LL_Bias_Info info;
                 if (i_ll_biases->get_bias_info(name, info)) {
@@ -630,7 +630,7 @@ int main(int argc, char* argv[]) {
         auto& cam_info = camera_state.camera_mgr->get_camera(0);
         auto* i_ll_biases = cam_info.camera->get_device().get_facility<Metavision::I_LL_Biases>();
     if (i_ll_biases) {
-        std::vector<std::string> bias_names = {"bias_diff", "bias_refr", "bias_fo", "bias_hpf", "bias_pr"};
+        std::vector<std::string> bias_names = {"bias_diff", "bias_refr", "bias_fo", "bias_hpf"};
         for (const auto& name : bias_names) {
             try {
                 Metavision::LL_Bias_Info info;
@@ -657,8 +657,6 @@ int main(int argc, char* argv[]) {
             config.camera_settings().bias_fo = bias_ranges["bias_fo"].current;
         if (bias_ranges.count("bias_hpf"))
             config.camera_settings().bias_hpf = bias_ranges["bias_hpf"].current;
-        if (bias_ranges.count("bias_pr"))
-            config.camera_settings().bias_pr = bias_ranges["bias_pr"].current;
     }
 
     // Check monitoring capabilities once at startup
@@ -709,7 +707,6 @@ int main(int argc, char* argv[]) {
         bias_ranges["bias_refr"] = {-25, 23, 0};
         bias_ranges["bias_fo"] = {-25, 23, 0};
         bias_ranges["bias_hpf"] = {-25, 23, 0};
-        bias_ranges["bias_pr"] = {-25, 23, 0};
         std::cout << "Simulation mode: using default bias ranges" << std::endl;
     }
 
@@ -1013,7 +1010,6 @@ int main(int argc, char* argv[]) {
             static float slider_refr = 50.0f;
             static float slider_fo = 50.0f;
             static float slider_hpf = 50.0f;
-            static float slider_pr = 50.0f;
             static bool sliders_initialized = false;
 
             // Initialize sliders from current bias values (only once)
@@ -1026,8 +1022,6 @@ int main(int argc, char* argv[]) {
                     slider_fo = bias_to_exp(cam_settings.bias_fo, bias_ranges["bias_fo"].min, bias_ranges["bias_fo"].max);
                 if (bias_ranges.count("bias_hpf"))
                     slider_hpf = bias_to_exp(cam_settings.bias_hpf, bias_ranges["bias_hpf"].min, bias_ranges["bias_hpf"].max);
-                if (bias_ranges.count("bias_pr"))
-                    slider_pr = bias_to_exp(cam_settings.bias_pr, bias_ranges["bias_pr"].min, bias_ranges["bias_pr"].max);
                 sliders_initialized = true;
             }
 
@@ -1073,17 +1067,6 @@ int main(int argc, char* argv[]) {
                 }
                 ImGui::TextWrapped("High-pass: %d [%d to %d] (exponential scale)",
                                    cam_settings.bias_hpf, range.min, range.max);
-            }
-            ImGui::Spacing();
-
-            if (bias_ranges.count("bias_pr")) {
-                auto& range = bias_ranges["bias_pr"];
-                if (ImGui::SliderFloat("bias_pr", &slider_pr, 0.0f, 100.0f, "%.0f%%")) {
-                    cam_settings.bias_pr = exp_to_bias(slider_pr, range.min, range.max);
-                    settings_changed = true;
-                }
-                ImGui::TextWrapped("Photoreceptor: %d [%d to %d] (exponential scale)",
-                                   cam_settings.bias_pr, range.min, range.max);
             }
             ImGui::Spacing();
 
@@ -1149,8 +1132,6 @@ int main(int argc, char* argv[]) {
                     cam_settings.bias_fo = (bias_ranges["bias_fo"].min + bias_ranges["bias_fo"].max) / 2;
                 if (bias_ranges.count("bias_hpf"))
                     cam_settings.bias_hpf = (bias_ranges["bias_hpf"].min + bias_ranges["bias_hpf"].max) / 2;
-                if (bias_ranges.count("bias_pr"))
-                    cam_settings.bias_pr = (bias_ranges["bias_pr"].min + bias_ranges["bias_pr"].max) / 2;
                 cam_settings.accumulation_time_s = 0.01f;
                 settings_changed = true;
             }
@@ -1612,7 +1593,6 @@ int main(int argc, char* argv[]) {
                 bool opt_br = ga_cfg.optimize_bias_refr;
                 bool opt_bf = ga_cfg.optimize_bias_fo;
                 bool opt_bh = ga_cfg.optimize_bias_hpf;
-                bool opt_bp = ga_cfg.optimize_bias_pr;
                 bool opt_ac = ga_cfg.optimize_accumulation;
                 bool opt_tf = ga_cfg.optimize_trail_filter;
                 bool opt_af = ga_cfg.optimize_antiflicker;
@@ -1622,7 +1602,6 @@ int main(int argc, char* argv[]) {
                 ImGui::Checkbox("bias_refr##ga_opt", &opt_br);
                 ImGui::Checkbox("bias_fo##ga_opt", &opt_bf); ImGui::SameLine();
                 ImGui::Checkbox("bias_hpf##ga_opt", &opt_bh);
-                ImGui::Checkbox("bias_pr##ga_opt", &opt_bp); ImGui::SameLine();
                 ImGui::Checkbox("accumulation##ga_opt", &opt_ac);
                 ImGui::Checkbox("trail_filter##ga_opt", &opt_tf); ImGui::SameLine();
                 ImGui::Checkbox("antiflicker##ga_opt", &opt_af);
@@ -1654,8 +1633,15 @@ int main(int argc, char* argv[]) {
                         params.num_generations = ga_cfg.num_generations;
                         params.mutation_rate = ga_cfg.mutation_rate;
                         params.crossover_rate = ga_cfg.crossover_rate;
-                        params.alpha = 1.0f;  // Weight for contrast
-                        params.beta = 0.5f;   // Weight for noise
+                        // Fitness weights - tune these for your specific goal
+                        // For 23 clean dots: emphasize contrast and clusters, penalize isolated pixels
+                        params.alpha = 2.0f;  // Weight for contrast (INCREASED - prioritize high contrast dots)
+                        params.beta = 0.5f;   // Weight for noise (reduce background noise)
+                        params.gamma = 2.0f;  // Weight for isolated pixels (heavily penalize single-pixel noise)
+
+                        // Event count constraint - prevent "turn everything off" solutions
+                        params.minimum_event_pixels = 500;  // 23 dots × ~25-50 pixels each
+                        params.delta = 5.0f;  // Heavy penalty for insufficient events
 
                         // Get bias ranges from camera hardware
                         EventCameraGeneticOptimizer::Genome::BiasRanges hw_ranges;
@@ -1757,30 +1743,53 @@ int main(int argc, char* argv[]) {
 
                 if (ImGui::CollapsingHeader("Best Parameters")) {
                     ImGui::Text("Biases:");
-                    ImGui::Text("  diff=%d refr=%d fo=%d",
+                    ImGui::Text("  diff=%d refr=%d fo=%d hpf=%d",
                                ga_state.best_genome.bias_diff,
                                ga_state.best_genome.bias_refr,
-                               ga_state.best_genome.bias_fo);
-                    ImGui::Text("  hpf=%d pr=%d",
-                               ga_state.best_genome.bias_hpf,
-                               ga_state.best_genome.bias_pr);
+                               ga_state.best_genome.bias_fo,
+                               ga_state.best_genome.bias_hpf);
                     ImGui::Text("Accumulation: %.3f s", ga_state.best_genome.accumulation_time_s);
                 }
 
                 if (!ga_state.running && camera_state.camera_connected) {
                     if (ImGui::Button("Apply Best Parameters", ImVec2(-1, 0))) {
-                        // Apply to config and camera
-                        config.camera_settings().bias_diff = ga_state.best_genome.bias_diff;
-                        config.camera_settings().bias_refr = ga_state.best_genome.bias_refr;
-                        config.camera_settings().bias_fo = ga_state.best_genome.bias_fo;
-                        config.camera_settings().bias_hpf = ga_state.best_genome.bias_hpf;
-                        config.camera_settings().bias_pr = ga_state.best_genome.bias_pr;
-                        config.camera_settings().accumulation_time_s = ga_state.best_genome.accumulation_time_s;
+                        // Clamp genome to hardware ranges before applying
+                        EventCameraGeneticOptimizer::Genome clamped_genome = ga_state.best_genome;
+
+                        // Get hardware ranges and clamp
+                        EventCameraGeneticOptimizer::Genome::BiasRanges hw_ranges;
+                        if (!bias_ranges.empty()) {
+                            if (bias_ranges.count("bias_diff")) {
+                                hw_ranges.diff_min = bias_ranges["bias_diff"].min;
+                                hw_ranges.diff_max = bias_ranges["bias_diff"].max;
+                            }
+                            if (bias_ranges.count("bias_refr")) {
+                                hw_ranges.refr_min = bias_ranges["bias_refr"].min;
+                                hw_ranges.refr_max = bias_ranges["bias_refr"].max;
+                            }
+                            if (bias_ranges.count("bias_fo")) {
+                                hw_ranges.fo_min = bias_ranges["bias_fo"].min;
+                                hw_ranges.fo_max = bias_ranges["bias_fo"].max;
+                            }
+                            if (bias_ranges.count("bias_hpf")) {
+                                hw_ranges.hpf_min = bias_ranges["bias_hpf"].min;
+                                hw_ranges.hpf_max = bias_ranges["bias_hpf"].max;
+                            }
+                        }
+                        clamped_genome.set_ranges(hw_ranges);
+                        clamped_genome.clamp();
+
+                        // Apply clamped values to config and camera
+                        config.camera_settings().bias_diff = clamped_genome.bias_diff;
+                        config.camera_settings().bias_refr = clamped_genome.bias_refr;
+                        config.camera_settings().bias_fo = clamped_genome.bias_fo;
+                        config.camera_settings().bias_hpf = clamped_genome.bias_hpf;
+                        config.camera_settings().accumulation_time_s = clamped_genome.accumulation_time_s;
 
                         auto& cam_info = camera_state.camera_mgr->get_camera(0);
                         apply_bias_settings(*cam_info.camera, config.camera_settings());
 
-                        std::cout << "Applied best GA parameters to camera" << std::endl;
+                        std::cout << "Applied best GA parameters to camera (clamped to hardware limits)" << std::endl;
                     }
                 }
             } else {
