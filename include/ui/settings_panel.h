@@ -36,6 +36,7 @@ private:
     void render_display_settings();
     void render_frame_generation();
     void render_apply_button();
+    void capture_frame();
 
     core::AppState& state_;
     AppConfig& config_;

@@ -53,6 +53,9 @@ void TextureManager::upload_frame(const cv::Mat& frame) {
 
     width_ = rgb_frame.cols;
     height_ = rgb_frame.rows;
+
+    // Store CPU copy for capture (store the original BGR frame, not RGB)
+    last_frame_ = frame.clone();
 }
 
 void TextureManager::reset() {
@@ -62,6 +65,7 @@ void TextureManager::reset() {
     }
     width_ = 0;
     height_ = 0;
+    last_frame_ = cv::Mat();  // Clear stored frame
 }
 
 } // namespace video

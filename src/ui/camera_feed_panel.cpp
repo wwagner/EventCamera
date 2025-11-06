@@ -1,11 +1,6 @@
 #include "ui/camera_feed_panel.h"
 #include "core/app_state.h"
 #include <imgui.h>
-#include <chrono>
-#include <opencv2/imgcodecs.hpp>
-#include <iostream>
-#include <iomanip>
-#include <sstream>
 
 namespace ui {
 
@@ -24,7 +19,7 @@ void CameraFeedPanel::render() {
     float camera_aspect = static_cast<float>(state_.display_settings().get_image_width()) /
                          state_.display_settings().get_image_height();
     float feed_window_width = 800;
-    float feed_window_height = (feed_window_width / camera_aspect) + 50;  // +50 for window chrome
+    float feed_window_height = (feed_window_width / camera_aspect) + 150;  // +150 for stats and chrome
 
     ImGui::SetNextWindowPos(position_, ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(feed_window_width, feed_window_height),
@@ -87,10 +82,6 @@ void CameraFeedPanel::render_feed_texture() {
     if (state_.texture_manager().get_texture_id() != 0) {
         ImVec2 window_size = ImGui::GetContentRegionAvail();
 
-        // Reserve space for button at bottom
-        float button_height = 30.0f;
-        window_size.y -= button_height;
-
         // Maintain aspect ratio
         float aspect = static_cast<float>(state_.texture_manager().get_width()) /
                       state_.texture_manager().get_height();
@@ -104,52 +95,8 @@ void CameraFeedPanel::render_feed_texture() {
 
         ImGui::Image((void*)(intptr_t)state_.texture_manager().get_texture_id(),
                    ImVec2(display_width, display_height));
-
-        // Capture button below the image
-        ImGui::Spacing();
-        if (ImGui::Button("Capture Frame", ImVec2(-1, 0))) {
-            capture_frame();
-        }
     } else {
         ImGui::Text("Waiting for camera frames...");
-    }
-}
-
-void CameraFeedPanel::capture_frame() {
-    // Get current frame from frame buffer
-    auto frame_opt = state_.frame_buffer().consume_frame();
-
-    if (!frame_opt.has_value()) {
-        std::cout << "No frame available to capture" << std::endl;
-        return;
-    }
-
-    cv::Mat frame = frame_opt.value();
-    if (frame.empty()) {
-        std::cout << "Frame is empty, cannot capture" << std::endl;
-        return;
-    }
-
-    // Generate filename with timestamp
-    auto now = std::chrono::system_clock::now();
-    auto time_t = std::chrono::system_clock::to_time_t(now);
-    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-        now.time_since_epoch()) % 1000;
-
-    std::stringstream ss;
-    ss << "capture_"
-       << std::put_time(std::localtime(&time_t), "%Y%m%d_%H%M%S")
-       << "_" << std::setfill('0') << std::setw(3) << ms.count()
-       << ".png";
-
-    std::string filename = ss.str();
-
-    // Save frame to file
-    try {
-        cv::imwrite(filename, frame);
-        std::cout << "Frame captured: " << filename << std::endl;
-    } catch (const std::exception& e) {
-        std::cerr << "Failed to capture frame: " << e.what() << std::endl;
     }
 }
 

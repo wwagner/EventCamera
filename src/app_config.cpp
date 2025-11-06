@@ -79,6 +79,17 @@ bool AppConfig::load(const std::string& filename) {
         key = key.substr(0, key.find_last_not_of(" \t") + 1);
         value = value.substr(value.find_first_not_of(" \t"));
 
+        // Strip inline comments (anything after #)
+        size_t comment_pos = value.find('#');
+        if (comment_pos != std::string::npos) {
+            value = value.substr(0, comment_pos);
+        }
+        // Trim trailing whitespace after removing comment
+        size_t last_non_space = value.find_last_not_of(" \t");
+        if (last_non_space != std::string::npos) {
+            value = value.substr(0, last_non_space + 1);
+        }
+
         // Parse based on section
         if (section == "Camera") {
             if (key == "bias_diff") camera_settings_.bias_diff = std::stoi(value);
@@ -88,6 +99,7 @@ bool AppConfig::load(const std::string& filename) {
             else if (key == "accumulation_time_s") camera_settings_.accumulation_time_s = std::stof(value);
             // Backward compatibility: convert microseconds to seconds if old key is used
             else if (key == "accumulation_time_us") camera_settings_.accumulation_time_s = std::stof(value) / 1000000.0f;
+            else if (key == "capture_directory") camera_settings_.capture_directory = value;
         }
         else if (section == "Stereo") {
             if (key == "baseline_m") stereo_settings_.baseline_m = std::stof(value);

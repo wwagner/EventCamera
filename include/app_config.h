@@ -34,6 +34,7 @@ public:
         int bias_fo = 128;          // Photoreceptor follower (0-255)
         int bias_hpf = 128;         // High-pass filter (0-255)
         float accumulation_time_s = 0.01f;  // Event accumulation period (0.001-0.05 seconds)
+        std::string capture_directory = "C:\\Users\\wolfw\\OneDrive\\Desktop";  // Directory for saving captured frames
     };
 
     // Stereo calibration settings

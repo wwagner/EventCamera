@@ -44,6 +44,12 @@ public:
     int get_height() const { return height_; }
 
     /**
+     * Get the last uploaded frame (CPU copy)
+     * @return Last frame, or empty Mat if none available
+     */
+    cv::Mat get_last_frame() const { return last_frame_.clone(); }
+
+    /**
      * Reset texture (deletes OpenGL texture)
      */
     void reset();
@@ -54,6 +60,7 @@ private:
     GLuint texture_id_ = 0;
     int width_ = 0;
     int height_ = 0;
+    cv::Mat last_frame_;  // Keep CPU copy for capture
 };
 
 } // namespace video

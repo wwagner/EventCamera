@@ -30,7 +30,6 @@ public:
 private:
     void render_statistics();
     void render_feed_texture();
-    void capture_frame();
 
     core::AppState& state_;
 };

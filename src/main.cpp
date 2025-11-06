@@ -755,6 +755,57 @@ int main(int argc, char* argv[]) {
         ImGui::SetNextWindowSize(ImVec2(420, window_height - 20), ImGuiCond_FirstUseEver);
 
         if (ImGui::Begin("Camera Settings")) {
+            // Capture Frame button at the top
+            if (ImGui::Button("Capture Frame", ImVec2(-1, 0))) {
+                std::cout << "Capture Frame button clicked!" << std::endl;
+
+                // Get currently displayed frame from texture manager
+                cv::Mat frame = app_state->texture_manager().get_last_frame();
+                std::cout << "Frame size: " << frame.cols << "x" << frame.rows
+                          << ", channels: " << frame.channels()
+                          << ", empty: " << (frame.empty() ? "YES" : "NO") << std::endl;
+
+                if (!frame.empty()) {
+                    // Generate timestamped filename
+                    auto now = std::chrono::system_clock::now();
+                    auto time_t = std::chrono::system_clock::to_time_t(now);
+                    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        now.time_since_epoch()) % 1000;
+
+                    std::stringstream ss;
+                    ss << "capture_"
+                       << std::put_time(std::localtime(&time_t), "%Y%m%d_%H%M%S")
+                       << "_" << std::setfill('0') << std::setw(3) << ms.count()
+                       << ".png";
+
+                    std::string filename = ss.str();
+
+                    // Construct full path with configured directory
+                    std::string capture_dir = config.camera_settings().capture_directory;
+                    std::string full_path = capture_dir;
+                    if (!capture_dir.empty() && capture_dir.back() != '\\' && capture_dir.back() != '/') {
+                        full_path += "\\";
+                    }
+                    full_path += filename;
+
+                    std::cout << "Attempting to save to: " << full_path << std::endl;
+
+                    try {
+                        bool success = cv::imwrite(full_path, frame);
+                        if (success) {
+                            std::cout << "Frame captured successfully: " << full_path << std::endl;
+                        } else {
+                            std::cerr << "cv::imwrite returned false - failed to save: " << full_path << std::endl;
+                        }
+                    } catch (const std::exception& e) {
+                        std::cerr << "Exception while capturing frame: " << e.what() << std::endl;
+                    }
+                } else {
+                    std::cout << "No frame available to capture (frame is empty)" << std::endl;
+                }
+            }
+            ImGui::Separator();
+
             // Get camera info if connected
             CameraManager::CameraInfo* cam_info_ptr = nullptr;
             if (app_state->camera_state().is_connected() && app_state->camera_state().camera_manager()) {
