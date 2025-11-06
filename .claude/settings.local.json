@@ -7,7 +7,10 @@
       "Bash(powershell:*)",
       "Bash(mkdir:*)",
       "Bash(git init:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(cmake --build:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)"
     ],
     "deny": [],
     "ask": []

@@ -81,6 +81,20 @@ add_executable(event_camera_viewer
     src/video/texture_manager.cpp
     src/video/filters/roi_filter.cpp
     src/video/filters/subtraction_filter.cpp
+    # Camera module (hardware features)
+    src/camera/feature_manager.cpp
+    src/camera/bias_manager.cpp
+    src/camera/features/monitoring_feature.cpp
+    src/camera/features/erc_feature.cpp
+    src/camera/features/antiflicker_feature.cpp
+    src/camera/features/trail_filter_feature.cpp
+    src/camera/features/roi_feature.cpp
+    src/camera/features/digital_crop_feature.cpp
+    # UI module (panels)
+    src/ui/settings_panel.cpp
+    src/ui/features_panel.cpp
+    src/ui/camera_feed_panel.cpp
+    src/ui/ga_panel.cpp
     ${IMGUI_SOURCES}
 )
 
