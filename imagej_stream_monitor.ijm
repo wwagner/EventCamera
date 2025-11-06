@@ -26,7 +26,7 @@ print("============================");
 print("Monitoring directory: " + streamDir);
 print("Refresh interval: " + refreshInterval + " ms");
 print("");
-print("Press ESC to stop monitoring");
+print("To stop: Press ESC or click 'Kill' button in toolbar");
 print("");
 
 lastFile = "";
@@ -89,14 +89,8 @@ while (true) {
         }
     }
 
-    // Check for ESC key
-    if (isKeyDown("escape")) {
-        print("");
-        print("Monitoring stopped by user");
-        break;
-    }
-
     // Wait before next check
+    // To stop monitoring: Press ESC or click the "Kill" button in ImageJ toolbar
     wait(refreshInterval);
 }
 
