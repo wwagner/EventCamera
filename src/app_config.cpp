@@ -100,6 +100,11 @@ bool AppConfig::load(const std::string& filename) {
             // Backward compatibility: convert microseconds to seconds if old key is used
             else if (key == "accumulation_time_us") camera_settings_.accumulation_time_s = std::stof(value) / 1000000.0f;
             else if (key == "capture_directory") camera_settings_.capture_directory = value;
+            // ImageJ streaming settings
+            else if (key == "imagej_streaming_enabled") camera_settings_.imagej_streaming_enabled = (std::stoi(value) != 0);
+            else if (key == "imagej_stream_fps") camera_settings_.imagej_stream_fps = std::stoi(value);
+            else if (key == "imagej_stream_directory") camera_settings_.imagej_stream_directory = value;
+            else if (key == "imagej_max_stream_files") camera_settings_.imagej_max_stream_files = std::stoi(value);
         }
         else if (section == "Stereo") {
             if (key == "baseline_m") stereo_settings_.baseline_m = std::stof(value);

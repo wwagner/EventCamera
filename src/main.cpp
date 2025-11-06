@@ -11,6 +11,9 @@
 #include <thread>
 #include <chrono>
 #include <cmath>
+#include <filesystem>
+#include <iomanip>
+#include <sstream>
 
 // OpenGL/GLFW/ImGui
 #include <GL/glew.h>
@@ -736,6 +739,10 @@ int main(int argc, char* argv[]) {
     bool settings_changed = false;
     auto previous_settings = config.camera_settings();
 
+    // ImageJ streaming state
+    auto last_stream_time = std::chrono::steady_clock::now();
+    int stream_frame_counter = 0;
+
     // Main render loop
     while (!glfwWindowShouldClose(window) && app_state->is_running()) {
         glfwPollEvents();
@@ -743,6 +750,48 @@ int main(int argc, char* argv[]) {
         // Handle ESC key
         if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
             app_state->request_shutdown();
+        }
+
+        // ImageJ streaming logic
+        if (config.camera_settings().imagej_streaming_enabled) {
+            auto now = std::chrono::steady_clock::now();
+            auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_stream_time).count();
+            int interval_ms = 1000 / config.camera_settings().imagej_stream_fps;
+
+            if (elapsed_ms >= interval_ms) {
+                cv::Mat frame = app_state->texture_manager().get_last_frame();
+                if (!frame.empty()) {
+                    // Create stream directory if it doesn't exist
+                    std::string stream_dir = config.camera_settings().imagej_stream_directory;
+                    std::filesystem::create_directories(stream_dir);
+
+                    // Generate filename with counter
+                    std::stringstream ss;
+                    ss << stream_dir;
+                    if (!stream_dir.empty() && stream_dir.back() != '\\' && stream_dir.back() != '/') {
+                        ss << "\\";
+                    }
+                    ss << "stream_" << std::setfill('0') << std::setw(6) << stream_frame_counter << ".png";
+                    std::string filepath = ss.str();
+
+                    // Save frame
+                    cv::imwrite(filepath, frame);
+                    stream_frame_counter++;
+
+                    // Clean up old files if needed
+                    if (stream_frame_counter > config.camera_settings().imagej_max_stream_files) {
+                        int old_frame = stream_frame_counter - config.camera_settings().imagej_max_stream_files - 1;
+                        std::stringstream old_ss;
+                        old_ss << stream_dir;
+                        if (!stream_dir.empty() && stream_dir.back() != '\\' && stream_dir.back() != '/') {
+                            old_ss << "\\";
+                        }
+                        old_ss << "stream_" << std::setfill('0') << std::setw(6) << old_frame << ".png";
+                        std::filesystem::remove(old_ss.str());
+                    }
+                }
+                last_stream_time = now;
+            }
         }
 
         // Start ImGui frame
@@ -804,6 +853,24 @@ int main(int argc, char* argv[]) {
                     std::cout << "No frame available to capture (frame is empty)" << std::endl;
                 }
             }
+            ImGui::Separator();
+
+            // ImageJ streaming controls
+            ImGui::Text("ImageJ Streaming");
+            bool streaming_enabled = config.camera_settings().imagej_streaming_enabled;
+            if (ImGui::Checkbox("Enable Streaming", &streaming_enabled)) {
+                config.camera_settings().imagej_streaming_enabled = streaming_enabled;
+                if (streaming_enabled) {
+                    std::cout << "ImageJ streaming enabled (" << config.camera_settings().imagej_stream_fps << " FPS)" << std::endl;
+                    std::cout << "Stream directory: " << config.camera_settings().imagej_stream_directory << std::endl;
+                } else {
+                    std::cout << "ImageJ streaming disabled" << std::endl;
+                }
+            }
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "(%d FPS to %s)",
+                config.camera_settings().imagej_stream_fps,
+                config.camera_settings().imagej_stream_directory.c_str());
             ImGui::Separator();
 
             // Get camera info if connected

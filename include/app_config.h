@@ -35,6 +35,12 @@ public:
         int bias_hpf = 128;         // High-pass filter (0-255)
         float accumulation_time_s = 0.01f;  // Event accumulation period (0.001-0.05 seconds)
         std::string capture_directory = "C:\\Users\\wolfw\\OneDrive\\Desktop";  // Directory for saving captured frames
+
+        // ImageJ streaming settings
+        bool imagej_streaming_enabled = false;  // Enable real-time streaming to ImageJ
+        int imagej_stream_fps = 10;             // Frames per second to stream
+        std::string imagej_stream_directory = "C:\\Users\\wolfw\\OneDrive\\Desktop\\imagej_stream";  // Stream directory
+        int imagej_max_stream_files = 100;      // Maximum stream files to keep
     };
 
     // Stereo calibration settings
