@@ -84,6 +84,8 @@ add_executable(event_camera_viewer
     # Camera module (hardware features)
     src/camera/feature_manager.cpp
     src/camera/bias_manager.cpp
+    src/camera/camera_controller.cpp
+    src/camera/event_processor.cpp
     src/camera/features/monitoring_feature.cpp
     src/camera/features/erc_feature.cpp
     src/camera/features/antiflicker_feature.cpp
