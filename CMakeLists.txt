@@ -97,6 +97,8 @@ add_executable(event_camera_viewer
     src/ui/features_panel.cpp
     src/ui/camera_feed_panel.cpp
     src/ui/ga_panel.cpp
+    # Optimization module
+    src/optimization/ga_controller.cpp
     ${IMGUI_SOURCES}
 )
 
