@@ -69,6 +69,18 @@ add_executable(event_camera_viewer
     src/camera_manager.cpp
     src/app_config.cpp
     src/event_camera_genetic_optimizer.cpp
+    # Core module (application state)
+    src/core/frame_sync.cpp
+    src/core/event_metrics.cpp
+    src/core/display_settings.cpp
+    src/core/camera_state.cpp
+    src/core/app_state.cpp
+    # Video processing module
+    src/video/frame_buffer.cpp
+    src/video/frame_processor.cpp
+    src/video/texture_manager.cpp
+    src/video/filters/roi_filter.cpp
+    src/video/filters/subtraction_filter.cpp
     ${IMGUI_SOURCES}
 )
 
