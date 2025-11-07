@@ -509,13 +509,14 @@ int main(int argc, char* argv[]) {
                          << range.max << "], current: " << range.current << std::endl;
             }
 
-            // Initialize config settings with current camera values
-            for (const auto& [name, range] : bias_ranges) {
-                if (name == "bias_diff") config.camera_settings().bias_diff = range.current;
-                else if (name == "bias_refr") config.camera_settings().bias_refr = range.current;
-                else if (name == "bias_fo") config.camera_settings().bias_fo = range.current;
-                else if (name == "bias_hpf") config.camera_settings().bias_hpf = range.current;
-            }
+            // Apply config settings from INI file to camera
+            std::cout << "\nApplying bias settings from config file..." << std::endl;
+            bias_manager.set_bias("bias_diff", config.camera_settings().bias_diff);
+            bias_manager.set_bias("bias_refr", config.camera_settings().bias_refr);
+            bias_manager.set_bias("bias_fo", config.camera_settings().bias_fo);
+            bias_manager.set_bias("bias_hpf", config.camera_settings().bias_hpf);
+            bias_manager.apply_to_camera();
+            std::cout << "Bias settings applied from config" << std::endl;
         } else {
             std::cerr << "Warning: Failed to initialize BiasManager" << std::endl;
         }
