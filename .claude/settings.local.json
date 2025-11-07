@@ -24,7 +24,8 @@
       "Bash(Select-Object -First 20)",
       "Bash(Select-String \"error C\")",
       "Bash(Select-Object -First 30)",
-      "Bash(temp_old_main.cpp)"
+      "Bash(temp_old_main.cpp)",
+      "Bash(git rm:*)"
     ],
     "deny": [],
     "ask": []

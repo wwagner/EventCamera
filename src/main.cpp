@@ -1293,8 +1293,30 @@ int main(int argc, char* argv[]) {
                         try {
                             digital_crop->enable(dc_enabled);
                             std::cout << "Digital Crop " << (dc_enabled ? "enabled" : "disabled") << std::endl;
+
+                            // Set the crop region when enabling
+                            if (dc_enabled) {
+                                // Ensure crop region is within bounds
+                                int max_w = app_state->display_settings().get_image_width() - dc_x;
+                                int max_h = app_state->display_settings().get_image_height() - dc_y;
+                                dc_width = std::min(dc_width, max_w);
+                                dc_height = std::min(dc_height, max_h);
+
+                                // Convert from (x, y, width, height) to (start_x, start_y, end_x, end_y)
+                                uint32_t start_x = dc_x;
+                                uint32_t start_y = dc_y;
+                                uint32_t end_x = dc_x + dc_width - 1;
+                                uint32_t end_y = dc_y + dc_height - 1;
+
+                                Metavision::I_DigitalCrop::Region region(start_x, start_y, end_x, end_y);
+                                digital_crop->set_window_region(region, false);
+                                std::cout << "Digital crop region set to [" << start_x << ", " << start_y
+                                         << ", " << end_x << ", " << end_y << "]" << std::endl;
+                            }
                         } catch (const std::exception& e) {
                             std::cerr << "Error enabling digital crop: " << e.what() << std::endl;
+                            std::cerr << "Note: Some digital features require camera restart to take effect" << std::endl;
+                            dc_enabled = !dc_enabled;  // Revert checkbox
                         }
                     }
 
