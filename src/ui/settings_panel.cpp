@@ -459,49 +459,50 @@ void SettingsPanel::render_apply_button() {
 void SettingsPanel::capture_frame() {
     std::cout << "Capture Frame button clicked!" << std::endl;
 
-    // Get currently displayed frame from texture manager
-    cv::Mat frame = state_.texture_manager().get_last_frame();
-    std::cout << "Frame size: " << frame.cols << "x" << frame.rows
-              << ", channels: " << frame.channels()
-              << ", empty: " << (frame.empty() ? "YES" : "NO") << std::endl;
+    // Generate timestamped filename base (shared by both cameras)
+    auto now = std::chrono::system_clock::now();
+    auto time_t = std::chrono::system_clock::to_time_t(now);
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now.time_since_epoch()) % 1000;
 
-    if (!frame.empty()) {
-        // Generate timestamped filename
-        auto now = std::chrono::system_clock::now();
-        auto time_t = std::chrono::system_clock::to_time_t(now);
-        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-            now.time_since_epoch()) % 1000;
+    std::stringstream ss;
+    ss << "capture_"
+       << std::put_time(std::localtime(&time_t), "%Y%m%d_%H%M%S")
+       << "_" << std::setfill('0') << std::setw(3) << ms.count();
 
-        std::stringstream ss;
-        ss << "capture_"
-           << std::put_time(std::localtime(&time_t), "%Y%m%d_%H%M%S")
-           << "_" << std::setfill('0') << std::setw(3) << ms.count()
-           << ".png";
+    std::string filename_base = ss.str();
 
-        std::string filename = ss.str();
+    // Construct base path with configured directory
+    std::string capture_dir = config_.camera_settings().capture_directory;
+    std::string base_path = capture_dir;
+    if (!capture_dir.empty() && capture_dir.back() != '\\' && capture_dir.back() != '/') {
+        base_path += "\\";
+    }
 
-        // Construct full path with configured directory
-        std::string capture_dir = config_.camera_settings().capture_directory;
-        std::string full_path = capture_dir;
-        if (!capture_dir.empty() && capture_dir.back() != '\\' && capture_dir.back() != '/') {
-            full_path += "\\";
-        }
-        full_path += filename;
+    // Capture from all cameras
+    int num_cameras = state_.camera_state().num_cameras();
+    const char* suffixes[] = {"_left", "_right"};
 
-        std::cout << "Attempting to save to: " << full_path << std::endl;
+    for (int i = 0; i < num_cameras && i < 2; ++i) {
+        cv::Mat frame = state_.texture_manager(i).get_last_frame();
 
-        try {
-            bool success = cv::imwrite(full_path, frame);
-            if (success) {
-                std::cout << "Frame captured successfully: " << full_path << std::endl;
-            } else {
-                std::cerr << "cv::imwrite returned false - failed to save: " << full_path << std::endl;
+        if (!frame.empty()) {
+            std::string full_path = base_path + filename_base + suffixes[i] + ".png";
+            std::cout << "Attempting to save Camera " << i << " to: " << full_path << std::endl;
+
+            try {
+                bool success = cv::imwrite(full_path, frame);
+                if (success) {
+                    std::cout << "Camera " << i << " frame captured successfully: " << full_path << std::endl;
+                } else {
+                    std::cerr << "cv::imwrite returned false - failed to save Camera " << i << ": " << full_path << std::endl;
+                }
+            } catch (const std::exception& e) {
+                std::cerr << "Exception while capturing frame from Camera " << i << ": " << e.what() << std::endl;
             }
-        } catch (const std::exception& e) {
-            std::cerr << "Exception while capturing frame: " << e.what() << std::endl;
+        } else {
+            std::cout << "No frame available to capture from Camera " << i << " (frame is empty)" << std::endl;
         }
-    } else {
-        std::cout << "No frame available to capture (frame is empty)" << std::endl;
     }
 }
 
