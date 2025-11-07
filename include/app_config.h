@@ -38,6 +38,11 @@ public:
         float accumulation_time_s = 0.01f;  // Event accumulation period (0.001-0.05 seconds)
         std::string capture_directory = "C:\\Users\\wolfw\\OneDrive\\Desktop";  // Directory for saving captured frames
 
+        // Trail Filter settings
+        bool trail_filter_enabled = true;   // Enable trail filter by default
+        int trail_filter_type = 2;          // Filter type: 0=TRAIL, 1=STC_CUT_TRAIL, 2=STC_KEEP_TRAIL
+        int trail_filter_threshold = 1000;  // Threshold in microseconds
+
         // ImageJ streaming settings
         bool imagej_streaming_enabled = false;  // Enable real-time streaming to ImageJ
         int imagej_stream_fps = 10;             // Frames per second to stream

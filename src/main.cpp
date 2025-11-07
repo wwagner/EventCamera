@@ -366,6 +366,27 @@ bool try_connect_camera(AppConfig& config, EventCamera::BiasManager& bias_mgr,
     app_state->feature_manager().initialize_all(*cam_info.camera);
     std::cout << "Hardware features initialized\n" << std::endl;
 
+    // Apply Trail Filter settings from config
+    auto trail_filter = std::dynamic_pointer_cast<EventCamera::TrailFilterFeature>(
+        app_state->feature_manager().get_feature("Trail Filter"));
+    if (trail_filter && trail_filter->is_available()) {
+        // Set filter type
+        Metavision::I_EventTrailFilterModule::Type type;
+        switch (config.camera_settings().trail_filter_type) {
+            case 0: type = Metavision::I_EventTrailFilterModule::Type::TRAIL; break;
+            case 1: type = Metavision::I_EventTrailFilterModule::Type::STC_CUT_TRAIL; break;
+            case 2: type = Metavision::I_EventTrailFilterModule::Type::STC_KEEP_TRAIL; break;
+            default: type = Metavision::I_EventTrailFilterModule::Type::STC_KEEP_TRAIL; break;
+        }
+        trail_filter->set_type(type);
+        trail_filter->set_threshold(config.camera_settings().trail_filter_threshold);
+        trail_filter->enable(config.camera_settings().trail_filter_enabled);
+        std::cout << "Trail Filter configured from config: "
+                  << (config.camera_settings().trail_filter_enabled ? "enabled" : "disabled")
+                  << ", type=" << config.camera_settings().trail_filter_type
+                  << ", threshold=" << config.camera_settings().trail_filter_threshold << "μs" << std::endl;
+    }
+
     // Create frame generator
     const uint32_t accumulation_time_us = static_cast<uint32_t>(
         config.camera_settings().accumulation_time_s * 1000000);
