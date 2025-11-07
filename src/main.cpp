@@ -326,10 +326,10 @@ bool try_connect_camera(AppConfig& config, EventCamera::BiasManager& bias_mgr,
     std::cout << "Found camera, attempting to connect..." << std::endl;
 
     // Stop simulation thread if running
-    if (app_state->camera_state().is_simulation_mode() && app_state->camera_state().event_thread()) {
+    if (app_state->camera_state().is_simulation_mode() && app_state->camera_state().event_thread(0)) {
         app_state->request_shutdown();
-        if (app_state->camera_state().event_thread()->joinable()) {
-            app_state->camera_state().event_thread()->join();
+        if (app_state->camera_state().event_thread(0)->joinable()) {
+            app_state->camera_state().event_thread(0)->join();
         }
         // Reset running state
         app_state = std::make_unique<core::AppState>();
@@ -592,72 +592,29 @@ int main(int argc, char* argv[]) {
 
     // Start camera or simulation
     if (app_state->camera_state().is_connected()) {
-        std::cout << "\nStarting camera..." << std::endl;
-        auto& cam_info = app_state->camera_state().camera_manager()->get_camera(0);
+        std::cout << "\nStarting cameras..." << std::endl;
 
         // Record camera start time for event latency calculation
         auto start_time = std::chrono::steady_clock::now();
         int64_t start_time_us = std::chrono::duration_cast<std::chrono::microseconds>(start_time.time_since_epoch()).count();
         app_state->camera_state().set_camera_start_time_us(start_time_us);
 
-        cam_info.camera->start();
-        std::cout << "Camera started successfully!" << std::endl;
+        // Start all cameras (event callbacks already set up by try_connect_camera)
+        int num_cameras = app_state->camera_state().num_cameras();
+        for (int i = 0; i < num_cameras; ++i) {
+            auto& cam_info = app_state->camera_state().camera_manager()->get_camera(i);
+            cam_info.camera->start();
+            std::cout << "Camera " << i << " started: " << cam_info.serial << std::endl;
+        }
+
         std::cout << "\nPress ESC or close window to exit\n" << std::endl;
-
-        // Camera event processing thread with full metrics and FPS limiting
-        app_state->camera_state().event_thread() = std::make_unique<std::thread>([&]() {
-            auto& cam_info = app_state->camera_state().camera_manager()->get_camera(0);
-            auto& camera = cam_info.camera;
-
-            camera->cd().add_callback([&](const Metavision::EventCD* begin,
-                                         const Metavision::EventCD* end) {
-                if (begin == end || !app_state) return;
-
-                // Get current time
-                auto now = std::chrono::steady_clock::now();
-                auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
-
-                // Count events for event rate calculation
-                int64_t event_count = end - begin;
-
-                // Track last event timestamp to measure event latency
-                Metavision::timestamp last_ts = (end-1)->t;
-
-                // Record events for metrics
-                app_state->event_metrics().record_events(event_count, now_us);
-                app_state->event_metrics().record_event_timestamp(last_ts);
-
-                // CRITICAL: Skip old event batches to prevent latency buildup
-                // Check age of newest event - if old, skip entire batch
-                int64_t cam_start = app_state->camera_state().get_camera_start_time_us();
-                Metavision::timestamp newest_event_ts = (end-1)->t;
-                int64_t newest_event_system_ts = cam_start + newest_event_ts;
-                int64_t event_age_us = now_us - newest_event_system_ts;
-
-                // Skip batches with events older than 100ms to stay current
-                if (event_age_us > 100000) {  // 100ms threshold
-                    // Skip old data - don't process into frame generator
-                    return;
-                }
-
-                // Process recent event batches
-                std::lock_guard<std::mutex> lock(framegen_mutex);
-                if (app_state && app_state->camera_state().frame_generator()) {
-                    app_state->camera_state().frame_generator()->process_events(begin, end);
-                }
-            });
-
-            while (app_state && app_state->is_running() && camera->is_running()) {
-                std::this_thread::sleep_for(std::chrono::microseconds(100));  // 0.1ms for low latency
-            }
-        });
     } else {
         // Simulation mode - generate synthetic frames
         std::cout << "\nStarting SIMULATION mode..." << std::endl;
         std::cout << "Generating synthetic event camera frames" << std::endl;
         std::cout << "\nPress ESC or close window to exit\n" << std::endl;
 
-        app_state->camera_state().event_thread() = std::make_unique<std::thread>([&]() {
+        app_state->camera_state().event_thread(0) = std::make_unique<std::thread>([&]() {
             std::random_device rd;
             std::mt19937 gen(rd());
             std::uniform_int_distribution<> noise_dist(0, 255);
@@ -775,29 +732,20 @@ int main(int argc, char* argv[]) {
         if (settings_panel.camera_reconnect_requested()) {
             settings_panel.reset_camera_reconnect_request();
 
-            std::cout << "\n=== Disconnecting camera ===" << std::endl;
+            std::cout << "\n=== Disconnecting cameras ===" << std::endl;
 
-            // Get camera info before disconnecting
-            CameraManager::CameraInfo* cam_info_ptr = nullptr;
+            // Stop all cameras
             if (app_state->camera_state().is_connected() && app_state->camera_state().camera_manager()) {
-                cam_info_ptr = &app_state->camera_state().camera_manager()->get_camera(0);
-
-                // Stop camera first
-                try {
-                    cam_info_ptr->camera->stop();
-                    std::cout << "Camera stopped" << std::endl;
-                } catch (const std::exception& e) {
-                    std::cerr << "Error stopping camera: " << e.what() << std::endl;
+                int num_cameras = app_state->camera_state().num_cameras();
+                for (int i = 0; i < num_cameras; ++i) {
+                    try {
+                        auto& cam_info = app_state->camera_state().camera_manager()->get_camera(i);
+                        cam_info.camera->stop();
+                        std::cout << "Camera " << i << " stopped" << std::endl;
+                    } catch (const std::exception& e) {
+                        std::cerr << "Error stopping camera " << i << ": " << e.what() << std::endl;
+                    }
                 }
-            }
-
-            // Stop event thread
-            if (app_state->camera_state().event_thread() && app_state->camera_state().event_thread()->joinable()) {
-                app_state->request_shutdown();
-                std::cout << "Waiting for event thread to stop..." << std::endl;
-                app_state->camera_state().event_thread()->join();
-                app_state->camera_state().event_thread().reset();
-                std::cout << "Event thread stopped" << std::endl;
             }
 
             // Reset the running flag so camera can start again
@@ -807,11 +755,13 @@ int main(int argc, char* argv[]) {
             app_state->feature_manager().shutdown_all();
             app_state->feature_manager().clear();
 
-            // Clear camera resources
-            app_state->camera_state().frame_generator().reset();
+            // Clear camera resources (frame generators, texture managers, and camera manager)
+            for (int i = 0; i < 2; ++i) {  // MAX_CAMERAS = 2
+                app_state->camera_state().frame_generator(i).reset();
+                app_state->texture_manager(i).reset();
+            }
             app_state->camera_state().camera_manager().reset();
             app_state->camera_state().set_connected(false);
-            app_state->texture_manager().reset();
 
             std::cout << "Camera disconnected" << std::endl;
             std::cout << "\n=== Reconnecting camera ===" << std::endl;
@@ -1533,9 +1483,11 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // Wait for event thread
-    if (app_state->camera_state().event_thread() && app_state->camera_state().event_thread()->joinable()) {
-        app_state->camera_state().event_thread()->join();
+    // Wait for event thread (simulation mode only)
+    if (app_state->camera_state().is_simulation_mode()) {
+        if (app_state->camera_state().event_thread(0) && app_state->camera_state().event_thread(0)->joinable()) {
+            app_state->camera_state().event_thread(0)->join();
+        }
     }
 
     // Cleanup ImGui
