@@ -34,11 +34,13 @@ public:
     void reset_settings_changed() { settings_changed_ = false; }
 
     bool camera_reconnect_requested() const { return camera_reconnect_requested_; }
+    void set_camera_reconnect_request() { camera_reconnect_requested_ = true; }
     void reset_camera_reconnect_request() { camera_reconnect_requested_ = false; }
     bool camera_connect_requested() const { return camera_connect_requested_; }
+    void set_camera_connect_request() { camera_connect_requested_ = true; }
     void reset_camera_connect_request() { camera_connect_requested_ = false; }
 
-private:
+    // Public render methods for custom layout
     void render_connection_controls();
     void render_bias_controls();
     void render_digital_features();
@@ -47,6 +49,8 @@ private:
     void render_genetic_algorithm();
     void render_apply_button();
     void capture_frame();
+
+private:
 
     core::AppState& state_;
     AppConfig& config_;

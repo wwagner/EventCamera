@@ -725,8 +725,8 @@ int main(int argc, char* argv[]) {
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        // Render settings panel
-        settings_panel.render();
+        // Render settings panel (hidden - we'll render sections manually below)
+        // settings_panel.render();
 
         // Handle camera connection requests from SettingsPanel
         if (settings_panel.camera_reconnect_requested()) {
@@ -1393,16 +1393,20 @@ int main(int argc, char* argv[]) {
         }
         // ImGui::End(); // TEMP: Commented out - Advanced window disabled
 
-        // Dual camera view windows - stacked vertically
+        // === NEW LAYOUT: Cameras side-by-side at top, settings strips below ===
         int num_cameras = app_state->camera_state().num_cameras();
         float camera_aspect = static_cast<float>(app_state->display_settings().get_image_width()) / app_state->display_settings().get_image_height();
-        float feed_window_width = window_width - 450;
-        float single_feed_height = (feed_window_width / camera_aspect) + 30;  // +30 for window chrome
 
-        // Camera 0 (Top)
+        // Calculate layout dimensions
+        float cam_spacing = 10.0f;
+        float single_cam_width = (window_width - 3 * cam_spacing) / 2.0f;  // Split width in half
+        float single_cam_height = (single_cam_width / camera_aspect) + 30.0f;  // +30 for title bar
+        float settings_top = single_cam_height + 20.0f;  // Settings start below cameras
+
+        // Camera 0 (Left)
         if (num_cameras > 0) {
-            ImGui::SetNextWindowPos(ImVec2(440, 10), ImGuiCond_FirstUseEver);
-            ImGui::SetNextWindowSize(ImVec2(feed_window_width, single_feed_height), ImGuiCond_FirstUseEver);
+            ImGui::SetNextWindowPos(ImVec2(cam_spacing, cam_spacing), ImGuiCond_FirstUseEver);
+            ImGui::SetNextWindowSize(ImVec2(single_cam_width, single_cam_height), ImGuiCond_FirstUseEver);
 
             if (ImGui::Begin("Camera 0")) {
                 upload_frame_to_gpu(0);
@@ -1429,10 +1433,10 @@ int main(int argc, char* argv[]) {
             ImGui::End();
         }
 
-        // Camera 1 (Bottom)
+        // Camera 1 (Right)
         if (num_cameras > 1) {
-            ImGui::SetNextWindowPos(ImVec2(440, 20 + single_feed_height), ImGuiCond_FirstUseEver);
-            ImGui::SetNextWindowSize(ImVec2(feed_window_width, single_feed_height), ImGuiCond_FirstUseEver);
+            ImGui::SetNextWindowPos(ImVec2(single_cam_width + 2 * cam_spacing, cam_spacing), ImGuiCond_FirstUseEver);
+            ImGui::SetNextWindowSize(ImVec2(single_cam_width, single_cam_height), ImGuiCond_FirstUseEver);
 
             if (ImGui::Begin("Camera 1")) {
                 upload_frame_to_gpu(1);
@@ -1458,6 +1462,84 @@ int main(int argc, char* argv[]) {
             }
             ImGui::End();
         }
+
+        // === Settings strips below cameras ===
+        float settings_height = window_height - settings_top - 10.0f;
+        float strip_width = (window_width - 4 * cam_spacing) / 3.0f;  // 3 strips
+
+        // Strip 1: Connection & Biases
+        ImGui::SetNextWindowPos(ImVec2(cam_spacing, settings_top), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(strip_width, settings_height), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Controls & Biases")) {
+            // Connection buttons
+            if (app_state->camera_state().is_connected()) {
+                if (ImGui::Button("Disconnect & Reconnect", ImVec2(-1, 0))) {
+                    settings_panel.set_camera_reconnect_request();
+                }
+            } else {
+                if (ImGui::Button("Connect Camera", ImVec2(-1, 0))) {
+                    settings_panel.set_camera_connect_request();
+                }
+            }
+
+            if (ImGui::Button("Capture Frame", ImVec2(-1, 0))) {
+                settings_panel.capture_frame();
+            }
+
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            settings_panel.render_connection_controls();
+
+            ImGui::Spacing();
+            ImGui::Separator();
+
+            if (ImGui::CollapsingHeader("Analog Biases", ImGuiTreeNodeFlags_DefaultOpen)) {
+                settings_panel.render_bias_controls();
+            }
+        }
+        ImGui::End();
+
+        // Strip 2: Digital Features & Display
+        ImGui::SetNextWindowPos(ImVec2(strip_width + 2 * cam_spacing, settings_top), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(strip_width, settings_height), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Features & Display")) {
+            if (ImGui::CollapsingHeader("Digital Features", ImGuiTreeNodeFlags_DefaultOpen)) {
+                settings_panel.render_digital_features();
+            }
+
+            ImGui::Spacing();
+            ImGui::Separator();
+
+            if (ImGui::CollapsingHeader("Display Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
+                settings_panel.render_display_settings();
+            }
+        }
+        ImGui::End();
+
+        // Strip 3: Frame Gen & Genetic Algorithm
+        ImGui::SetNextWindowPos(ImVec2(2 * strip_width + 3 * cam_spacing, settings_top), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(strip_width, settings_height), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Generation & Optimization")) {
+            if (ImGui::CollapsingHeader("Frame Generation", ImGuiTreeNodeFlags_DefaultOpen)) {
+                settings_panel.render_frame_generation();
+            }
+
+            ImGui::Spacing();
+            ImGui::Separator();
+
+            if (ImGui::CollapsingHeader("Genetic Algorithm Optimization")) {
+                settings_panel.render_genetic_algorithm();
+            }
+
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            settings_panel.render_apply_button();
+        }
+        ImGui::End();
 
         // Render
         ImGui::Render();
