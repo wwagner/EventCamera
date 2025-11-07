@@ -159,6 +159,8 @@ void SettingsPanel::render_bias_controls() {
 
     // Static variables to track slider positions (initialized once)
     static float slider_diff = 50.0f;
+    static float slider_diff_on = 50.0f;
+    static float slider_diff_off = 50.0f;
     static float slider_refr = 50.0f;
     static float slider_fo = 50.0f;
     static float slider_hpf = 50.0f;
@@ -168,6 +170,10 @@ void SettingsPanel::render_bias_controls() {
     if (!sliders_initialized && !bias_ranges.empty()) {
         if (bias_ranges.count("bias_diff"))
             slider_diff = bias_to_exp(cam_settings.bias_diff, bias_ranges.at("bias_diff").min, bias_ranges.at("bias_diff").max);
+        if (bias_ranges.count("bias_diff_on"))
+            slider_diff_on = bias_to_exp(cam_settings.bias_diff_on, bias_ranges.at("bias_diff_on").min, bias_ranges.at("bias_diff_on").max);
+        if (bias_ranges.count("bias_diff_off"))
+            slider_diff_off = bias_to_exp(cam_settings.bias_diff_off, bias_ranges.at("bias_diff_off").min, bias_ranges.at("bias_diff_off").max);
         if (bias_ranges.count("bias_refr"))
             slider_refr = bias_to_exp(cam_settings.bias_refr, bias_ranges.at("bias_refr").min, bias_ranges.at("bias_refr").max);
         if (bias_ranges.count("bias_fo"))
@@ -195,6 +201,46 @@ void SettingsPanel::render_bias_controls() {
         }
         ImGui::TextWrapped("Event threshold: %d [%d to %d] (exponential scale)",
                            cam_settings.bias_diff, range.min, range.max);
+        ImGui::Spacing();
+    }
+
+    if (bias_ranges.count("bias_diff_on")) {
+        const auto& range = bias_ranges.at("bias_diff_on");
+        if (ImGui::SliderFloat("bias_diff_on", &slider_diff_on, 0.0f, 100.0f, "%.0f%%")) {
+            cam_settings.bias_diff_on = exp_to_bias(slider_diff_on, range.min, range.max);
+            settings_changed_ = true;
+        }
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(80);
+        int temp_diff_on = cam_settings.bias_diff_on;
+        if (ImGui::InputInt("##bias_diff_on_input", &temp_diff_on)) {
+            temp_diff_on = std::clamp(temp_diff_on, range.min, range.max);
+            cam_settings.bias_diff_on = temp_diff_on;
+            slider_diff_on = bias_to_exp(temp_diff_on, range.min, range.max);
+            settings_changed_ = true;
+        }
+        ImGui::TextWrapped("ON threshold: %d [%d to %d] (exponential scale)",
+                           cam_settings.bias_diff_on, range.min, range.max);
+        ImGui::Spacing();
+    }
+
+    if (bias_ranges.count("bias_diff_off")) {
+        const auto& range = bias_ranges.at("bias_diff_off");
+        if (ImGui::SliderFloat("bias_diff_off", &slider_diff_off, 0.0f, 100.0f, "%.0f%%")) {
+            cam_settings.bias_diff_off = exp_to_bias(slider_diff_off, range.min, range.max);
+            settings_changed_ = true;
+        }
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(80);
+        int temp_diff_off = cam_settings.bias_diff_off;
+        if (ImGui::InputInt("##bias_diff_off_input", &temp_diff_off)) {
+            temp_diff_off = std::clamp(temp_diff_off, range.min, range.max);
+            cam_settings.bias_diff_off = temp_diff_off;
+            slider_diff_off = bias_to_exp(temp_diff_off, range.min, range.max);
+            settings_changed_ = true;
+        }
+        ImGui::TextWrapped("OFF threshold: %d [%d to %d] (exponential scale)",
+                           cam_settings.bias_diff_off, range.min, range.max);
         ImGui::Spacing();
     }
 

@@ -522,6 +522,8 @@ int main(int argc, char* argv[]) {
             // Apply config settings from INI file to camera
             std::cout << "\nApplying bias settings from config file..." << std::endl;
             bias_manager.set_bias("bias_diff", config.camera_settings().bias_diff);
+            bias_manager.set_bias("bias_diff_on", config.camera_settings().bias_diff_on);
+            bias_manager.set_bias("bias_diff_off", config.camera_settings().bias_diff_off);
             bias_manager.set_bias("bias_refr", config.camera_settings().bias_refr);
             bias_manager.set_bias("bias_fo", config.camera_settings().bias_fo);
             bias_manager.set_bias("bias_hpf", config.camera_settings().bias_hpf);
