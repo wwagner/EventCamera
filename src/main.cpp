@@ -378,14 +378,7 @@ bool try_connect_camera(AppConfig& config, EventCamera::BiasManager& bias_mgr,
     app_state->camera_state().frame_generator() = std::make_unique<Metavision::PeriodicFrameGenerationAlgorithm>(
         width, height, accumulation_time_us);
 
-    if (!start_camera) {
-        // Camera initialized but not started - caller will start it later
-        app_state->camera_state().set_connected(true);
-        app_state->camera_state().set_simulation_mode(false);
-        std::cout << "Camera connected but not started (will start after UI initialization)" << std::endl;
-        return true;
-    }
-
+    // Set up frame generator output callback (must be done before starting camera)
     app_state->camera_state().frame_generator()->set_output_callback([](const Metavision::timestamp ts, cv::Mat& frame) {
         if (frame.empty() || !app_state) return;
 
@@ -402,6 +395,14 @@ bool try_connect_camera(AppConfig& config, EventCamera::BiasManager& bias_mgr,
         }
         // Note: frame_buffer tracks its own dropped/generated statistics
     });
+
+    if (!start_camera) {
+        // Camera initialized but not started - caller will start it later
+        app_state->camera_state().set_connected(true);
+        app_state->camera_state().set_simulation_mode(false);
+        std::cout << "Camera connected but not started (will start after UI initialization)" << std::endl;
+        return true;
+    }
 
     // Start camera
     auto start_time = std::chrono::steady_clock::now();
