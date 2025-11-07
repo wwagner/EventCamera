@@ -15,7 +15,10 @@ bool BiasManager::initialize(Metavision::Camera& camera) {
         return false;
     }
 
-    // Query ranges for standard biases
+    // First, try to list ALL available biases from the camera
+    std::cout << "\n=== BiasManager: Querying all available biases from camera ===" << std::endl;
+
+    // Query ranges for biases we know about
     std::vector<std::string> bias_names = {"bias_diff", "bias_diff_on", "bias_diff_off", "bias_fo", "bias_hpf", "bias_refr"};
 
     bias_ranges_.clear();
@@ -30,15 +33,18 @@ bool BiasManager::initialize(Metavision::Camera& camera) {
                 // Initialize slider position
                 slider_positions_[name] = bias_to_slider(current, range.first, range.second);
 
-                std::cout << "BiasManager: " << name << " range: [" << range.first
-                         << ", " << range.second << "], current: " << current << std::endl;
+                std::cout << "  ✓ " << name << ": range=[" << range.first
+                         << " to " << range.second << "], current=" << current << std::endl;
+            } else {
+                std::cout << "  ✗ " << name << ": NOT SUPPORTED by hardware" << std::endl;
             }
         } catch (const std::exception& e) {
-            std::cerr << "BiasManager: Could not query " << name << ": " << e.what() << std::endl;
+            std::cout << "  ✗ " << name << ": ERROR - " << e.what() << std::endl;
         }
     }
 
-    std::cout << "BiasManager: Initialized with " << bias_ranges_.size() << " biases" << std::endl;
+    std::cout << "BiasManager: Initialized with " << bias_ranges_.size() << " supported biases" << std::endl;
+    std::cout << "============================================================\n" << std::endl;
     return !bias_ranges_.empty();
 }
 
@@ -140,19 +146,22 @@ bool BiasManager::render_bias_ui(const std::string& name, const std::string& lab
 
     float& slider_pos = slider_positions_[name];
 
-    // Render exponential slider
+    // Render slider with actual bias value
     std::string slider_label = label.empty() ? name : label;
-    if (ImGui::SliderFloat((slider_label + "##" + name).c_str(), &slider_pos,
-                          0.0f, 100.0f, "%.0f%%")) {
-        range.current = slider_to_bias(slider_pos, range.min, range.max);
+    int temp_value = range.current;
+    if (ImGui::SliderInt((slider_label + "##" + name).c_str(), &temp_value,
+                         range.min, range.max)) {
+        range.current = temp_value;
+        slider_pos = bias_to_slider(temp_value, range.min, range.max);
         changed = true;
     }
 
-    // Show actual value and range
-    ImGui::TextWrapped("%s: %d [%d to %d] (exponential scale)",
-                      description.empty() ? label.c_str() : description.c_str(),
-                      range.current, range.min, range.max);
-    ImGui::Spacing();
+    // Show description and range
+    if (!description.empty()) {
+        ImGui::TextWrapped("%s [%d to %d]",
+                          description.c_str(), range.min, range.max);
+        ImGui::Spacing();
+    }
 
     return changed;
 }
