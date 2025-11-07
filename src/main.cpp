@@ -475,9 +475,10 @@ int main(int argc, char* argv[]) {
     app_state = std::make_unique<core::AppState>();
     std::cout << "Application state initialized" << std::endl;
 
-    // Camera/Simulation Mode
+    // Initialize BiasManager for camera bias control
+    EventCamera::BiasManager bias_manager;
 
-    // List available cameras
+    // Camera/Simulation Mode
     std::cout << "\nScanning for event cameras..." << std::endl;
     auto available_cameras = CameraManager::list_available_cameras();
 
@@ -492,114 +493,17 @@ int main(int argc, char* argv[]) {
             std::cout << "  [" << i << "] " << available_cameras[i] << std::endl;
         }
 
-        // Initialize camera manager
-        app_state->camera_state().camera_manager() = std::make_unique<CameraManager>();
-        std::string serial1 = available_cameras[0];  // Use first camera
-        int num_cameras = app_state->camera_state().camera_manager()->initialize(serial1);
-
-        if (num_cameras == 0) {
-            std::cerr << "ERROR: Failed to initialize camera - starting in SIMULATION MODE" << std::endl;
+        // Use try_connect_camera to properly initialize everything including features
+        if (!try_connect_camera(config, bias_manager, available_cameras[0])) {
+            std::cerr << "ERROR: Failed to connect to camera - starting in SIMULATION MODE" << std::endl;
             app_state->camera_state().set_simulation_mode(true);
-            app_state->camera_state().camera_manager() = nullptr;
             app_state->display_settings().set_image_size(1280, 720);
         } else {
-            std::cout << "\nInitialized " << num_cameras << " camera(s)" << std::endl;
-            app_state->camera_state().set_connected(true);
-
-            // Get camera info
-            auto& cam_info = app_state->camera_state().camera_manager()->get_camera(0);
-            app_state->display_settings().set_image_size(cam_info.width, cam_info.height);
-
-            std::cout << "Camera: " << cam_info.serial << std::endl;
-            std::cout << "Resolution: " << cam_info.width << "x" << cam_info.height << std::endl;
+            std::cout << "Successfully connected to camera!" << std::endl;
         }
     }
 
-    // Initialize BiasManager for camera bias control
-    EventCamera::BiasManager bias_manager;
-
-    // Check which monitoring features are supported
-    struct MonitoringCapabilities {
-        bool has_temperature = false;
-        bool has_illumination = false;
-        bool has_dead_time = false;
-    } monitoring_caps;
-
-    // Initialize BiasManager with camera settings
-    if (app_state->camera_state().is_connected()) {
-        std::cout << "\nInitializing BiasManager with camera..." << std::endl;
-        auto& cam_info = app_state->camera_state().camera_manager()->get_camera(0);
-        if (bias_manager.initialize(*cam_info.camera)) {
-            std::cout << "BiasManager initialized successfully" << std::endl;
-
-            // Display available bias ranges
-            const auto& bias_ranges = bias_manager.get_bias_ranges();
-            for (const auto& [name, range] : bias_ranges) {
-                std::cout << name << " range: [" << range.min << ", "
-                         << range.max << "], current: " << range.current << std::endl;
-            }
-
-            // Apply config settings from INI file to camera
-            std::cout << "\nApplying bias settings from config file..." << std::endl;
-            bias_manager.set_bias("bias_diff", config.camera_settings().bias_diff);
-            bias_manager.set_bias("bias_diff_on", config.camera_settings().bias_diff_on);
-            bias_manager.set_bias("bias_diff_off", config.camera_settings().bias_diff_off);
-            bias_manager.set_bias("bias_refr", config.camera_settings().bias_refr);
-            bias_manager.set_bias("bias_fo", config.camera_settings().bias_fo);
-            bias_manager.set_bias("bias_hpf", config.camera_settings().bias_hpf);
-            bias_manager.apply_to_camera();
-            std::cout << "Bias settings applied from config" << std::endl;
-        } else {
-            std::cerr << "Warning: Failed to initialize BiasManager" << std::endl;
-        }
-
-        // Check monitoring capabilities once at startup
-        // Disable monitoring features entirely to avoid error spam
-        auto* monitoring_facility = cam_info.camera->get_device().get_facility<Metavision::I_Monitoring>();
-    if (monitoring_facility) {
-        std::cout << "\nChecking monitoring capabilities..." << std::endl;
-
-        // Temperature
-        bool temp_works = false;
-        try {
-            int temp = monitoring_facility->get_temperature();
-            // If we got here without exception and temp is reasonable, mark as supported
-            if (temp >= -40 && temp <= 120) {  // Reasonable sensor temp range
-                monitoring_caps.has_temperature = true;
-                temp_works = true;
-                std::cout << "  Temperature: supported (current: " << temp << "°C)" << std::endl;
-            }
-        } catch (...) {}
-        if (!temp_works) {
-            std::cout << "  Temperature: not supported" << std::endl;
-        }
-
-        // Illumination - FORCE DISABLED due to error spam
-        // Even if it "works", it generates HAL errors, so disable it
-        monitoring_caps.has_illumination = false;
-        std::cout << "  Illumination: disabled (generates errors on this camera)" << std::endl;
-
-        // Pixel Dead Time
-        bool deadtime_works = false;
-        try {
-            int dt = monitoring_facility->get_pixel_dead_time();
-            if (dt >= 0 && dt <= 100000) {  // Reasonable dead time range (0-100ms)
-                monitoring_caps.has_dead_time = true;
-                deadtime_works = true;
-                std::cout << "  Pixel Dead Time: supported (current: " << dt << " μs)" << std::endl;
-            }
-        } catch (...) {}
-        if (!deadtime_works) {
-            std::cout << "  Pixel Dead Time: not supported" << std::endl;
-        }
-    }
-
-        std::cout << "Debug: Camera initialization complete!" << std::endl;
-    } else {
-        // Simulation mode - setup default bias ranges
-        std::cout << "Simulation mode: setting up default bias ranges" << std::endl;
-        bias_manager.setup_simulation_defaults();
-    }
+    std::cout << "Debug: Camera initialization complete!" << std::endl;
 
     // Create frame generation algorithm (used in camera mode only)
 
@@ -915,51 +819,10 @@ int main(int argc, char* argv[]) {
 
 
 
-            // Hardware Monitoring
-            Metavision::I_Monitoring* monitoring = nullptr;
-            if (app_state->camera_state().is_connected() && cam_info_ptr) {
-                monitoring = cam_info_ptr->camera->get_device().get_facility<Metavision::I_Monitoring>();
-            }
-            if (monitoring && (monitoring_caps.has_temperature || monitoring_caps.has_illumination || monitoring_caps.has_dead_time)) {
-                if (ImGui::CollapsingHeader("Hardware Monitoring", ImGuiTreeNodeFlags_DefaultOpen)) {
-                    if (monitoring_caps.has_temperature) {
-                        try {
-                            int temp = monitoring->get_temperature();
-                            ImGui::Text("Temperature: %d°C", temp);
-                            if (temp > 60) {
-                                ImGui::SameLine();
-                                ImGui::TextColored(ImVec4(1, 0, 0, 1), "⚠ HOT");
-                            }
-                        } catch (...) {
-                            ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "Temperature: Error");
-                        }
-                    }
+            // NOTE: Digital features (Monitoring, ROI, ERC, etc.) are now handled by FeatureManager
+            // and rendered in SettingsPanel::render_digital_features()
 
-                    if (monitoring_caps.has_illumination) {
-                        try {
-                            int illum = monitoring->get_illumination();
-                            ImGui::Text("Illumination: %d lux", illum);
-                        } catch (...) {
-                            ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "Illumination: Error");
-                        }
-                    }
-
-                    if (monitoring_caps.has_dead_time) {
-                        try {
-                            int dead_time = monitoring->get_pixel_dead_time();
-                            ImGui::Text("Pixel Dead Time: %d μs", dead_time);
-                        } catch (...) {
-                            ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "Pixel Dead Time: Error");
-                        }
-                    }
-
-                    if (!monitoring_caps.has_temperature && !monitoring_caps.has_illumination && !monitoring_caps.has_dead_time) {
-                        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1), "No monitoring features available");
-                    }
-                }
-            }
-
-            // ROI (Region of Interest)
+            // ROI (Region of Interest) - OLD CODE KEPT FOR REFERENCE
             Metavision::I_ROI* roi = nullptr;
             if (app_state->camera_state().is_connected() && cam_info_ptr) {
                 roi = cam_info_ptr->camera->get_device().get_facility<Metavision::I_ROI>();
