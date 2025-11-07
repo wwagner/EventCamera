@@ -26,7 +26,8 @@
       "Bash(Select-Object -First 30)",
       "Bash(temp_old_main.cpp)",
       "Bash(git rm:*)",
-      "Bash(Select-Object -First 100)"
+      "Bash(Select-Object -First 100)",
+      "Bash(Select-String \"camera.*start\")"
     ],
     "deny": [],
     "ask": []

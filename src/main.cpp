@@ -307,7 +307,7 @@ EventCameraGeneticOptimizer::FitnessResult evaluate_genome_fitness(
  * Attempt to connect to a camera (for hot-plug support)
  */
 bool try_connect_camera(AppConfig& config, EventCamera::BiasManager& bias_mgr,
-                        const std::string& serial_hint = "") {
+                        const std::string& serial_hint = "", bool start_camera = true) {
     if (!app_state) return false;
 
     std::lock_guard<std::mutex> lock(app_state->camera_state().connection_mutex());
@@ -377,6 +377,14 @@ bool try_connect_camera(AppConfig& config, EventCamera::BiasManager& bias_mgr,
     int height = app_state->display_settings().get_image_height();
     app_state->camera_state().frame_generator() = std::make_unique<Metavision::PeriodicFrameGenerationAlgorithm>(
         width, height, accumulation_time_us);
+
+    if (!start_camera) {
+        // Camera initialized but not started - caller will start it later
+        app_state->camera_state().set_connected(true);
+        app_state->camera_state().set_simulation_mode(false);
+        std::cout << "Camera connected but not started (will start after UI initialization)" << std::endl;
+        return true;
+    }
 
     app_state->camera_state().frame_generator()->set_output_callback([](const Metavision::timestamp ts, cv::Mat& frame) {
         if (frame.empty() || !app_state) return;
@@ -494,50 +502,19 @@ int main(int argc, char* argv[]) {
         }
 
         // Use try_connect_camera to properly initialize everything including features
-        if (!try_connect_camera(config, bias_manager, available_cameras[0])) {
+        // Don't start camera yet - wait until after UI is initialized
+        if (!try_connect_camera(config, bias_manager, available_cameras[0], false)) {
             std::cerr << "ERROR: Failed to connect to camera - starting in SIMULATION MODE" << std::endl;
             app_state->camera_state().set_simulation_mode(true);
             app_state->display_settings().set_image_size(1280, 720);
         } else {
-            std::cout << "Successfully connected to camera!" << std::endl;
+            std::cout << "Successfully connected to camera (not started yet)" << std::endl;
         }
     }
 
     std::cout << "Debug: Camera initialization complete!" << std::endl;
 
-    // Create frame generation algorithm (used in camera mode only)
-
-    if (app_state->camera_state().is_connected()) {
-        std::cout << "Debug: About to create frame generation algorithm..." << std::endl;
-        const uint32_t accumulation_time_us = static_cast<uint32_t>(
-            config.camera_settings().accumulation_time_s * 1000000);
-
-        int width = app_state->display_settings().get_image_width();
-        int height = app_state->display_settings().get_image_height();
-        app_state->camera_state().frame_generator() = std::make_unique<Metavision::PeriodicFrameGenerationAlgorithm>(
-            width, height, accumulation_time_us);
-        std::cout << "Debug: Frame generation algorithm created" << std::endl;
-
-        std::cout << "Frame accumulation time: " << config.camera_settings().accumulation_time_s
-                  << "s (" << accumulation_time_us << " us)" << std::endl;
-
-        // Set up frame callback with FPS limiting
-        app_state->camera_state().frame_generator()->set_output_callback([](const Metavision::timestamp ts, cv::Mat& frame) {
-            if (frame.empty() || !app_state) return;
-
-            // Rate limit display updates to target FPS
-            auto now = std::chrono::steady_clock::now();
-            auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
-            int fps_target = app_state->display_settings().get_target_fps();
-
-            // Check if enough time has passed since last display
-            if (app_state->frame_sync().should_display_frame(now_us, fps_target)) {
-                app_state->frame_sync().on_frame_generated(ts, now_us);
-                app_state->frame_sync().on_frame_displayed(now_us);
-                update_texture(frame);
-            }
-        });
-    }
+    // NOTE: Frame generation and callbacks are set up by try_connect_camera()
 
     // Initialize GLFW
     if (!glfwInit()) {
@@ -585,27 +562,61 @@ int main(int argc, char* argv[]) {
     if (app_state->camera_state().is_connected()) {
         std::cout << "\nStarting camera..." << std::endl;
         auto& cam_info = app_state->camera_state().camera_manager()->get_camera(0);
+
+        // Record camera start time for event latency calculation
+        auto start_time = std::chrono::steady_clock::now();
+        int64_t start_time_us = std::chrono::duration_cast<std::chrono::microseconds>(start_time.time_since_epoch()).count();
+        app_state->camera_state().set_camera_start_time_us(start_time_us);
+
         cam_info.camera->start();
         std::cout << "Camera started successfully!" << std::endl;
         std::cout << "\nPress ESC or close window to exit\n" << std::endl;
 
-        // Camera event processing thread
+        // Camera event processing thread with full metrics and FPS limiting
         app_state->camera_state().event_thread() = std::make_unique<std::thread>([&]() {
             auto& cam_info = app_state->camera_state().camera_manager()->get_camera(0);
             auto& camera = cam_info.camera;
 
-        // Set up event callback
-        camera->cd().add_callback([&](const Metavision::EventCD* begin,
-                                     const Metavision::EventCD* end) {
-            std::lock_guard<std::mutex> lock(framegen_mutex);
-            if (app_state && app_state->camera_state().frame_generator()) {
-                app_state->camera_state().frame_generator()->process_events(begin, end);
-            }
-        });
+            camera->cd().add_callback([&](const Metavision::EventCD* begin,
+                                         const Metavision::EventCD* end) {
+                if (begin == end || !app_state) return;
 
-            // Process events while running
+                // Count events for event rate calculation
+                int64_t event_count = end - begin;
+
+                // Track last event timestamp to measure event latency
+                Metavision::timestamp last_ts = (end-1)->t;
+
+                // Get current time
+                auto now = std::chrono::steady_clock::now();
+                auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
+
+                // Record events for metrics
+                app_state->event_metrics().record_events(event_count, now_us);
+                app_state->event_metrics().record_event_timestamp(last_ts);
+
+                // CRITICAL FIX: Skip ALL old event batches immediately
+                // Check age of newest event - if old, skip entire batch without iterating
+                int64_t cam_start = app_state->camera_state().get_camera_start_time_us();
+
+                Metavision::timestamp newest_event_ts = (end-1)->t;
+                int64_t newest_event_system_ts = cam_start + newest_event_ts;
+                int64_t event_age_us = now_us - newest_event_system_ts;
+
+                // Skip any batch where even the newest event is older than 50ms
+                if (event_age_us > 50000) {  // 50ms - be aggressive about skipping old data
+                    return;  // Skip entire batch immediately
+                }
+
+                // Only process recent batches
+                std::lock_guard<std::mutex> lock(framegen_mutex);
+                if (app_state && app_state->camera_state().frame_generator()) {
+                    app_state->camera_state().frame_generator()->process_events(begin, end);
+                }
+            });
+
             while (app_state && app_state->is_running() && camera->is_running()) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                std::this_thread::sleep_for(std::chrono::microseconds(100));  // 0.1ms for low latency
             }
         });
     } else {
