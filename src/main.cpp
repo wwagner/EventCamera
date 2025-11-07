@@ -35,7 +35,6 @@
 #include <metavision/hal/facilities/i_monitoring.h>
 #include <metavision/hal/facilities/i_antiflicker_module.h>
 #include <metavision/hal/facilities/i_event_trail_filter_module.h>
-#include <metavision/hal/facilities/i_digital_crop.h>
 
 // Local headers
 #include "camera_manager.h"
@@ -46,7 +45,6 @@
 #include "camera/features/erc_feature.h"
 #include "camera/features/antiflicker_feature.h"
 #include "camera/features/trail_filter_feature.h"
-#include "camera/features/digital_crop_feature.h"
 #include "camera/features/roi_feature.h"
 #include "camera/features/monitoring_feature.h"
 
@@ -362,7 +360,6 @@ bool try_connect_camera(AppConfig& config, EventCamera::BiasManager& bias_mgr,
     app_state->feature_manager().register_feature(std::make_shared<EventCamera::ERCFeature>());
     app_state->feature_manager().register_feature(std::make_shared<EventCamera::AntiFlickerFeature>());
     app_state->feature_manager().register_feature(std::make_shared<EventCamera::TrailFilterFeature>());
-    app_state->feature_manager().register_feature(std::make_shared<EventCamera::DigitalCropFeature>(app_state->display_settings()));
     app_state->feature_manager().register_feature(std::make_shared<EventCamera::ROIFeature>(app_state->roi_filter(), app_state->display_settings()));
     app_state->feature_manager().register_feature(std::make_shared<EventCamera::MonitoringFeature>());
 
@@ -1176,91 +1173,7 @@ int main(int argc, char* argv[]) {
                 }
             }
 
-            // Digital Crop Module
-            Metavision::I_DigitalCrop* digital_crop = nullptr;
-            if (app_state->camera_state().is_connected() && cam_info_ptr) {
-                digital_crop = cam_info_ptr->camera->get_device().get_facility<Metavision::I_DigitalCrop>();
-            }
-            if (digital_crop) {
-                if (ImGui::CollapsingHeader("Digital Crop")) {
-                    static bool dc_enabled = false;
-                    static int dc_x = 0, dc_y = 0;
-                    static int dc_width = app_state->display_settings().get_image_width();
-                    static int dc_height = app_state->display_settings().get_image_height();
-
-                    ImGui::TextWrapped("Crop sensor output to reduce resolution and data volume");
-                    ImGui::Spacing();
-
-                    if (ImGui::Checkbox("Enable Digital Crop", &dc_enabled)) {
-                        try {
-                            digital_crop->enable(dc_enabled);
-                            std::cout << "Digital Crop " << (dc_enabled ? "enabled" : "disabled") << std::endl;
-
-                            // Set the crop region when enabling
-                            if (dc_enabled) {
-                                // Ensure crop region is within bounds
-                                int max_w = app_state->display_settings().get_image_width() - dc_x;
-                                int max_h = app_state->display_settings().get_image_height() - dc_y;
-                                dc_width = std::min(dc_width, max_w);
-                                dc_height = std::min(dc_height, max_h);
-
-                                // Convert from (x, y, width, height) to (start_x, start_y, end_x, end_y)
-                                uint32_t start_x = dc_x;
-                                uint32_t start_y = dc_y;
-                                uint32_t end_x = dc_x + dc_width - 1;
-                                uint32_t end_y = dc_y + dc_height - 1;
-
-                                Metavision::I_DigitalCrop::Region region(start_x, start_y, end_x, end_y);
-                                digital_crop->set_window_region(region, false);
-                                std::cout << "Digital crop region set to [" << start_x << ", " << start_y
-                                         << ", " << end_x << ", " << end_y << "]" << std::endl;
-                            }
-                        } catch (const std::exception& e) {
-                            std::cerr << "Error enabling digital crop: " << e.what() << std::endl;
-                            std::cerr << "Note: Some digital features require camera restart to take effect" << std::endl;
-                            dc_enabled = !dc_enabled;  // Revert checkbox
-                        }
-                    }
-
-                    ImGui::Spacing();
-
-                    // Position and size controls
-                    ImGui::Text("Crop Region:");
-                    bool dc_changed = false;
-                    dc_changed |= ImGui::SliderInt("X Position", &dc_x, 0, app_state->display_settings().get_image_width() - 1);
-                    dc_changed |= ImGui::SliderInt("Y Position", &dc_y, 0, app_state->display_settings().get_image_height() - 1);
-                    dc_changed |= ImGui::SliderInt("Width", &dc_width, 1, app_state->display_settings().get_image_width());
-                    dc_changed |= ImGui::SliderInt("Height", &dc_height, 1, app_state->display_settings().get_image_height());
-
-                    // Apply crop region if changed and enabled
-                    if (dc_changed && dc_enabled) {
-                        try {
-                            // Ensure crop region is within bounds
-                            int max_w = app_state->display_settings().get_image_width() - dc_x;
-                            int max_h = app_state->display_settings().get_image_height() - dc_y;
-                            dc_width = std::min(dc_width, max_w);
-                            dc_height = std::min(dc_height, max_h);
-
-                            // Convert from (x, y, width, height) to (start_x, start_y, end_x, end_y)
-                            uint32_t start_x = dc_x;
-                            uint32_t start_y = dc_y;
-                            uint32_t end_x = dc_x + dc_width - 1;
-                            uint32_t end_y = dc_y + dc_height - 1;
-
-                            Metavision::I_DigitalCrop::Region region(start_x, start_y, end_x, end_y);
-                            digital_crop->set_window_region(region, false);
-                            std::cout << "Digital crop region set to [" << start_x << ", " << start_y
-                                     << ", " << end_x << ", " << end_y << "]" << std::endl;
-                        } catch (const std::exception& e) {
-                            std::cerr << "Error setting crop region: " << e.what() << std::endl;
-                        }
-                    }
-
-                    ImGui::Spacing();
-                    ImGui::TextWrapped("Note: Digital crop reduces sensor resolution");
-                    ImGui::TextWrapped("Similar to ROI but less flexible");
-                }
-            }
+            // NOTE: Digital Crop removed - use Region of Interest (ROI) instead
         }
 
         // Genetic Algorithm Optimization section

@@ -91,7 +91,6 @@ add_executable(event_camera_viewer
     src/camera/features/antiflicker_feature.cpp
     src/camera/features/trail_filter_feature.cpp
     src/camera/features/roi_feature.cpp
-    src/camera/features/digital_crop_feature.cpp
     # UI module (panels)
     src/ui/settings_panel.cpp
     src/ui/features_panel.cpp
