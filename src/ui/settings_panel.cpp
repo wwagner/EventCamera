@@ -20,9 +20,9 @@ SettingsPanel::SettingsPanel(core::AppState& state,
     , config_(config)
     , bias_mgr_(bias_mgr) {
     previous_settings_ = config_.camera_settings();
-    // Set panel position and size
+    // Set panel position and size (left side of screen)
     set_position(ImVec2(10, 10));
-    set_size(ImVec2(420, 880));
+    set_size(ImVec2(400, 600));
 }
 
 void SettingsPanel::render() {

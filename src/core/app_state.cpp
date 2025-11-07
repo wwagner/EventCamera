@@ -69,4 +69,8 @@ void AppState::request_shutdown() {
     running_.store(false);
 }
 
+void AppState::reset_running_flag() {
+    running_.store(true);
+}
+
 } // namespace core

@@ -807,9 +807,11 @@ int main(int argc, char* argv[]) {
                 std::cout << "Waiting for event thread to stop..." << std::endl;
                 app_state->camera_state().event_thread()->join();
                 app_state->camera_state().event_thread().reset();
-                app_state = std::make_unique<core::AppState>();
                 std::cout << "Event thread stopped" << std::endl;
             }
+
+            // Reset the running flag so camera can start again
+            app_state->reset_running_flag();
 
             // Clear camera resources
             app_state->camera_state().frame_generator().reset();
@@ -838,9 +840,9 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // Advanced Features panel (keeping original code for now)
-        ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(420, window_height - 20), ImGuiCond_FirstUseEver);
+        // Advanced Features panel (positioned below basic settings)
+        ImGui::SetNextWindowPos(ImVec2(10, 620), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(400, window_height - 630), ImGuiCond_FirstUseEver);
 
         if (ImGui::Begin("Camera Settings - Advanced")) {
             // Get camera info pointer for Advanced Features section

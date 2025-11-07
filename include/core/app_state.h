@@ -99,6 +99,11 @@ public:
      */
     void request_shutdown();
 
+    /**
+     * Reset running flag (for camera reconnection)
+     */
+    void reset_running_flag();
+
 private:
     std::atomic<bool> running_{true};
 
