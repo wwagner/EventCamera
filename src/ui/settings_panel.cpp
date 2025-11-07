@@ -20,9 +20,9 @@ SettingsPanel::SettingsPanel(core::AppState& state,
     , config_(config)
     , bias_mgr_(bias_mgr) {
     previous_settings_ = config_.camera_settings();
-    // Set panel position and size (left side of screen)
+    // Set panel position and size (left side of screen) - larger to fit all sections
     set_position(ImVec2(10, 10));
-    set_size(ImVec2(400, 600));
+    set_size(ImVec2(450, 900));
 }
 
 void SettingsPanel::render() {
@@ -32,59 +32,83 @@ void SettingsPanel::render() {
     ImGui::SetNextWindowSize(size_, ImGuiCond_FirstUseEver);
 
     if (ImGui::Begin(title().c_str(), &visible_)) {
-        // Capture Frame button at the top
+        // Top buttons
+        if (state_.camera_state().is_connected()) {
+            if (ImGui::Button("Disconnect & Reconnect Camera", ImVec2(-1, 0))) {
+                camera_reconnect_requested_ = true;
+            }
+        } else {
+            if (ImGui::Button("Connect Camera", ImVec2(-1, 0))) {
+                camera_connect_requested_ = true;
+            }
+        }
+
         if (ImGui::Button("Capture Frame", ImVec2(-1, 0))) {
             capture_frame();
         }
-        ImGui::Separator();
 
-        // ImageJ streaming controls
-        ImGui::Text("ImageJ Streaming");
-        bool streaming_enabled = config_.camera_settings().imagej_streaming_enabled;
-        if (ImGui::Checkbox("Enable Streaming", &streaming_enabled)) {
-            config_.camera_settings().imagej_streaming_enabled = streaming_enabled;
-            if (streaming_enabled) {
-                std::cout << "ImageJ streaming enabled (" << config_.camera_settings().imagej_stream_fps << " FPS)" << std::endl;
-                std::cout << "Stream directory: " << config_.camera_settings().imagej_stream_directory << std::endl;
-            } else {
-                std::cout << "ImageJ streaming disabled" << std::endl;
-            }
-        }
-        ImGui::SameLine();
-        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "(%d FPS to %s)",
-            config_.camera_settings().imagej_stream_fps,
-            config_.camera_settings().imagej_stream_directory.c_str());
+        ImGui::Spacing();
         ImGui::Separator();
+        ImGui::Spacing();
 
+        // Camera status info (always visible, not collapsible)
         render_connection_controls();
 
+        ImGui::Spacing();
         ImGui::Separator();
-        render_bias_controls();
 
+        // All settings as collapsible sections
+        if (ImGui::CollapsingHeader("Analog Biases", ImGuiTreeNodeFlags_DefaultOpen)) {
+            render_bias_controls();
+        }
+
+        if (ImGui::CollapsingHeader("Digital Features")) {
+            render_digital_features();
+        }
+
+        if (ImGui::CollapsingHeader("Display Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
+            render_display_settings();
+        }
+
+        if (ImGui::CollapsingHeader("Frame Generation", ImGuiTreeNodeFlags_DefaultOpen)) {
+            render_frame_generation();
+        }
+
+        if (ImGui::CollapsingHeader("ImageJ Streaming")) {
+            bool streaming_enabled = config_.camera_settings().imagej_streaming_enabled;
+            if (ImGui::Checkbox("Enable Streaming", &streaming_enabled)) {
+                config_.camera_settings().imagej_streaming_enabled = streaming_enabled;
+                if (streaming_enabled) {
+                    std::cout << "ImageJ streaming enabled (" << config_.camera_settings().imagej_stream_fps << " FPS)" << std::endl;
+                    std::cout << "Stream directory: " << config_.camera_settings().imagej_stream_directory << std::endl;
+                } else {
+                    std::cout << "ImageJ streaming disabled" << std::endl;
+                }
+            }
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "(%d FPS to %s)",
+                config_.camera_settings().imagej_stream_fps,
+                config_.camera_settings().imagej_stream_directory.c_str());
+        }
+
+        if (ImGui::CollapsingHeader("Genetic Algorithm Optimization")) {
+            render_genetic_algorithm();
+        }
+
+        ImGui::Spacing();
         ImGui::Separator();
-        render_display_settings();
-
-        ImGui::Separator();
-        render_frame_generation();
-
         render_apply_button();
     }
     ImGui::End();
 }
 
 void SettingsPanel::render_connection_controls() {
+    // Camera status (no buttons - those are at the top)
     if (state_.camera_state().is_connected() && state_.camera_state().camera_manager()) {
         auto& cam_info = state_.camera_state().camera_manager()->get_camera(0);
         ImGui::Text("Camera: %s", cam_info.serial.c_str());
-
-        if (ImGui::Button("Disconnect & Reconnect Camera", ImVec2(-1, 0))) {
-            camera_reconnect_requested_ = true;
-        }
     } else {
         ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "Mode: SIMULATION");
-        if (ImGui::Button("Connect Camera", ImVec2(-1, 0))) {
-            camera_connect_requested_ = true;
-        }
     }
 
     int width = state_.display_settings().get_image_width();
@@ -420,6 +444,16 @@ void SettingsPanel::capture_frame() {
     } else {
         std::cout << "No frame available to capture (frame is empty)" << std::endl;
     }
+}
+
+void SettingsPanel::render_digital_features() {
+    ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Digital features shown here when camera connected");
+    // This will be implemented by moving digital filter code from main.cpp
+}
+
+void SettingsPanel::render_genetic_algorithm() {
+    ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "GA controls shown here when camera connected");
+    // This will be implemented by moving GA UI code from main.cpp
 }
 
 } // namespace ui

@@ -41,8 +41,10 @@ public:
 private:
     void render_connection_controls();
     void render_bias_controls();
+    void render_digital_features();
     void render_display_settings();
     void render_frame_generation();
+    void render_genetic_algorithm();
     void render_apply_button();
     void capture_frame();
 

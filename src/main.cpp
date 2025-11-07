@@ -863,11 +863,14 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // Advanced Features panel (positioned below basic settings)
+        // Advanced Features panel (TEMP: Hidden - moved to SettingsPanel)
+        /*
         ImGui::SetNextWindowPos(ImVec2(10, 620), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(ImVec2(400, window_height - 630), ImGuiCond_FirstUseEver);
 
         if (ImGui::Begin("Camera Settings - Advanced")) {
+        */
+        if (false) { // TEMP: Disabled
             // Get camera info pointer for Advanced Features section
             CameraManager::CameraInfo* cam_info_ptr = nullptr;
             if (app_state->camera_state().is_connected() && app_state->camera_state().camera_manager()) {
@@ -1592,7 +1595,7 @@ int main(int argc, char* argv[]) {
                 ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "No optimization results yet");
             }
         }
-        ImGui::End();
+        // ImGui::End(); // TEMP: Commented out - Advanced window disabled
 
         // Camera view window
         // Size window to match camera aspect ratio
