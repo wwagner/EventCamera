@@ -103,7 +103,7 @@ bool ROIFeature::render_ui() {
 
     bool changed = false;
 
-    if (ImGui::CollapsingHeader("Region of Interest (ROI)")) {
+    if (ImGui::TreeNode("Region of Interest (ROI)")) {
         ImGui::TextWrapped("%s", description().c_str());
         ImGui::Spacing();
 
@@ -160,6 +160,8 @@ bool ROIFeature::render_ui() {
             ImGui::SameLine();
             ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "ACTIVE");
         }
+
+        ImGui::TreePop();
     }
 
     return changed;

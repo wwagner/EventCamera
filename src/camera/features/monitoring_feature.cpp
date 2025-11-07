@@ -68,7 +68,7 @@ bool MonitoringFeature::render_ui() {
         return false;
     }
 
-    if (ImGui::CollapsingHeader("Hardware Monitoring", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (ImGui::TreeNode("Hardware Monitoring")) {
         if (has_temperature_) {
             try {
                 int temp = monitoring_->get_temperature();
@@ -104,6 +104,8 @@ bool MonitoringFeature::render_ui() {
             ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1),
                              "No monitoring features available");
         }
+
+        ImGui::TreePop();
     }
 
     return false;  // Read-only feature, never changes settings

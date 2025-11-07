@@ -101,7 +101,7 @@ bool AntiFlickerFeature::render_ui() {
 
     bool changed = false;
 
-    if (ImGui::CollapsingHeader("Anti-Flicker Filter")) {
+    if (ImGui::TreeNode("Anti-Flicker Filter")) {
         ImGui::TextWrapped("%s", description().c_str());
         ImGui::Spacing();
 
@@ -181,6 +181,8 @@ bool AntiFlickerFeature::render_ui() {
         }
 
         ImGui::TextWrapped("Range: %d - %d Hz", min_freq, max_freq);
+
+        ImGui::TreePop();
     }
 
     return changed;

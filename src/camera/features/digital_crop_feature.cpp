@@ -90,7 +90,7 @@ bool DigitalCropFeature::render_ui() {
 
     bool changed = false;
 
-    if (ImGui::CollapsingHeader("Digital Crop")) {
+    if (ImGui::TreeNode("Digital Crop")) {
         ImGui::TextWrapped("%s", description().c_str());
         ImGui::Spacing();
 
@@ -125,6 +125,8 @@ bool DigitalCropFeature::render_ui() {
         ImGui::TextWrapped("Region: [%d, %d] to [%d, %d] (%dx%d)",
                           x_, y_, x_ + width_ - 1, y_ + height_ - 1,
                           width_, height_);
+
+        ImGui::TreePop();
     }
 
     return changed;

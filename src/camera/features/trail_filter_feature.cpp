@@ -102,7 +102,7 @@ bool TrailFilterFeature::render_ui() {
 
     bool changed = false;
 
-    if (ImGui::CollapsingHeader("Event Trail Filter")) {
+    if (ImGui::TreeNode("Event Trail Filter")) {
         ImGui::TextWrapped("%s", description().c_str());
         ImGui::Spacing();
 
@@ -145,6 +145,8 @@ bool TrailFilterFeature::render_ui() {
         } catch (const std::exception& e) {
             ImGui::TextWrapped("Error: Could not get threshold range");
         }
+
+        ImGui::TreePop();
     }
 
     return changed;

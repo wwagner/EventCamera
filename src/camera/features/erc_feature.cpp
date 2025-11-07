@@ -80,7 +80,7 @@ bool ERCFeature::render_ui() {
 
     bool changed = false;
 
-    if (ImGui::CollapsingHeader("Event Rate Controller (ERC)")) {
+    if (ImGui::TreeNode("Event Rate Controller (ERC)")) {
         ImGui::TextWrapped("%s", description().c_str());
         ImGui::Spacing();
 
@@ -116,6 +116,8 @@ bool ERCFeature::render_ui() {
                 ImGui::Text("Count Period: %d μs", period);
             } catch (...) {}
         }
+
+        ImGui::TreePop();
     }
 
     return changed;
