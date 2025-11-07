@@ -1036,6 +1036,16 @@ int main(int argc, char* argv[]) {
                     cam_settings.bias_diff = exp_to_bias(slider_diff, range.min, range.max);
                     settings_changed = true;
                 }
+                // Add input box for direct value entry
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(80);
+                int temp_diff = cam_settings.bias_diff;
+                if (ImGui::InputInt("##bias_diff_input", &temp_diff)) {
+                    temp_diff = std::clamp(temp_diff, range.min, range.max);
+                    cam_settings.bias_diff = temp_diff;
+                    slider_diff = bias_to_exp(temp_diff, range.min, range.max);
+                    settings_changed = true;
+                }
                 ImGui::TextWrapped("Event threshold: %d [%d to %d] (exponential scale)",
                                    cam_settings.bias_diff, range.min, range.max);
             }
@@ -1045,6 +1055,16 @@ int main(int argc, char* argv[]) {
                 auto& range = bias_ranges["bias_refr"];
                 if (ImGui::SliderFloat("bias_refr", &slider_refr, 0.0f, 100.0f, "%.0f%%")) {
                     cam_settings.bias_refr = exp_to_bias(slider_refr, range.min, range.max);
+                    settings_changed = true;
+                }
+                // Add input box for direct value entry
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(80);
+                int temp_refr = cam_settings.bias_refr;
+                if (ImGui::InputInt("##bias_refr_input", &temp_refr)) {
+                    temp_refr = std::clamp(temp_refr, range.min, range.max);
+                    cam_settings.bias_refr = temp_refr;
+                    slider_refr = bias_to_exp(temp_refr, range.min, range.max);
                     settings_changed = true;
                 }
                 ImGui::TextWrapped("Refractory: %d [%d to %d] (exponential scale)",
@@ -1058,6 +1078,16 @@ int main(int argc, char* argv[]) {
                     cam_settings.bias_fo = exp_to_bias(slider_fo, range.min, range.max);
                     settings_changed = true;
                 }
+                // Add input box for direct value entry
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(80);
+                int temp_fo = cam_settings.bias_fo;
+                if (ImGui::InputInt("##bias_fo_input", &temp_fo)) {
+                    temp_fo = std::clamp(temp_fo, range.min, range.max);
+                    cam_settings.bias_fo = temp_fo;
+                    slider_fo = bias_to_exp(temp_fo, range.min, range.max);
+                    settings_changed = true;
+                }
                 ImGui::TextWrapped("Follower: %d [%d to %d] (exponential scale)",
                                    cam_settings.bias_fo, range.min, range.max);
             }
@@ -1067,6 +1097,16 @@ int main(int argc, char* argv[]) {
                 auto& range = bias_ranges["bias_hpf"];
                 if (ImGui::SliderFloat("bias_hpf", &slider_hpf, 0.0f, 100.0f, "%.0f%%")) {
                     cam_settings.bias_hpf = exp_to_bias(slider_hpf, range.min, range.max);
+                    settings_changed = true;
+                }
+                // Add input box for direct value entry
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(80);
+                int temp_hpf = cam_settings.bias_hpf;
+                if (ImGui::InputInt("##bias_hpf_input", &temp_hpf)) {
+                    temp_hpf = std::clamp(temp_hpf, range.min, range.max);
+                    cam_settings.bias_hpf = temp_hpf;
+                    slider_hpf = bias_to_exp(temp_hpf, range.min, range.max);
                     settings_changed = true;
                 }
                 ImGui::TextWrapped("High-pass: %d [%d to %d] (exponential scale)",
