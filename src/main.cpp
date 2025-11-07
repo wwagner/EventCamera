@@ -335,16 +335,21 @@ bool try_connect_camera(AppConfig& config, EventCamera::BiasManager& bias_mgr,
         app_state = std::make_unique<core::AppState>();
     }
 
-    // Initialize camera manager
+    // Initialize camera manager - auto-detect all available cameras
     app_state->camera_state().camera_manager() = std::make_unique<CameraManager>();
-    int num_cameras = app_state->camera_state().camera_manager()->initialize(serial_hint);
+
+    // Try to initialize dual cameras (empty strings = auto-detect)
+    int num_cameras = app_state->camera_state().camera_manager()->initialize("", "");
 
     if (num_cameras == 0) {
-        std::cerr << "Failed to initialize camera" << std::endl;
+        std::cerr << "Failed to initialize any cameras" << std::endl;
         app_state->camera_state().camera_manager() = nullptr;
         return false;
     }
 
+    std::cout << "Initialized " << num_cameras << " camera(s)" << std::endl;
+
+    // Use first camera for display settings
     auto& cam_info = app_state->camera_state().camera_manager()->get_camera(0);
     app_state->display_settings().set_image_size(cam_info.width, cam_info.height);
 
