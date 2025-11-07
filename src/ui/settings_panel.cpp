@@ -377,9 +377,32 @@ void SettingsPanel::render_apply_button() {
         ImGui::TextColored(ImVec4(1, 1, 0, 1), "Settings changed!");
 
         if (ImGui::Button("Apply Settings", ImVec2(-1, 0))) {
-            // Apply bias settings
-            if (state_.camera_state().is_connected() && bias_mgr_.is_initialized()) {
-                bias_mgr_.apply_to_camera();
+            // Apply bias settings to ALL cameras
+            if (state_.camera_state().is_connected() && state_.camera_state().camera_manager()) {
+                int num_cameras = state_.camera_state().num_cameras();
+                std::cout << "Applying settings to all " << num_cameras << " camera(s)..." << std::endl;
+
+                for (int i = 0; i < num_cameras; ++i) {
+                    auto& cam_info = state_.camera_state().camera_manager()->get_camera(i);
+                    auto* ll_biases = cam_info.camera->get_device().get_facility<Metavision::I_LL_Biases>();
+
+                    if (ll_biases) {
+                        std::cout << "Applying biases to Camera " << i << "..." << std::endl;
+                        auto& cam_settings = config_.camera_settings();
+
+                        try { ll_biases->set("bias_diff", cam_settings.bias_diff); } catch (...) {}
+                        try { ll_biases->set("bias_diff_on", cam_settings.bias_diff_on); } catch (...) {}
+                        try { ll_biases->set("bias_diff_off", cam_settings.bias_diff_off); } catch (...) {}
+                        try { ll_biases->set("bias_refr", cam_settings.bias_refr); } catch (...) {}
+                        try { ll_biases->set("bias_fo", cam_settings.bias_fo); } catch (...) {}
+                        try { ll_biases->set("bias_hpf", cam_settings.bias_hpf); } catch (...) {}
+
+                        std::cout << "  Camera " << i << " biases applied" << std::endl;
+                    }
+                }
+
+                // Also apply digital features to all cameras
+                state_.feature_manager().apply_all_settings();
             }
 
             // Update frame generation note
@@ -397,7 +420,33 @@ void SettingsPanel::render_apply_button() {
     ImGui::Spacing();
 
     if (ImGui::Button("Reset to Defaults", ImVec2(-1, 0))) {
+        // Reset bias manager to get default values
         bias_mgr_.reset_to_defaults();
+
+        // Apply default biases to ALL cameras
+        if (state_.camera_state().is_connected() && state_.camera_state().camera_manager()) {
+            int num_cameras = state_.camera_state().num_cameras();
+            std::cout << "Resetting biases to defaults on all " << num_cameras << " camera(s)..." << std::endl;
+
+            // Get default values from config after reset
+            auto& cam_settings = config_.camera_settings();
+
+            for (int i = 0; i < num_cameras; ++i) {
+                auto& cam_info = state_.camera_state().camera_manager()->get_camera(i);
+                auto* ll_biases = cam_info.camera->get_device().get_facility<Metavision::I_LL_Biases>();
+
+                if (ll_biases) {
+                    std::cout << "Resetting Camera " << i << " to defaults..." << std::endl;
+                    try { ll_biases->set("bias_diff", cam_settings.bias_diff); } catch (...) {}
+                    try { ll_biases->set("bias_diff_on", cam_settings.bias_diff_on); } catch (...) {}
+                    try { ll_biases->set("bias_diff_off", cam_settings.bias_diff_off); } catch (...) {}
+                    try { ll_biases->set("bias_refr", cam_settings.bias_refr); } catch (...) {}
+                    try { ll_biases->set("bias_fo", cam_settings.bias_fo); } catch (...) {}
+                    try { ll_biases->set("bias_hpf", cam_settings.bias_hpf); } catch (...) {}
+                }
+            }
+        }
+
         config_.camera_settings().accumulation_time_s = 0.01f;
         settings_changed_ = true;
     }

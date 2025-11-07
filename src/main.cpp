@@ -360,7 +360,7 @@ bool try_connect_camera(AppConfig& config, EventCamera::BiasManager& bias_mgr,
         std::cerr << "Warning: Failed to initialize BiasManager with new camera" << std::endl;
     }
 
-    // Register and initialize hardware features
+    // Register and initialize hardware features for ALL cameras
     std::cout << "\nRegistering hardware features..." << std::endl;
     app_state->feature_manager().register_feature(std::make_shared<EventCamera::ERCFeature>());
     app_state->feature_manager().register_feature(std::make_shared<EventCamera::AntiFlickerFeature>());
@@ -368,10 +368,15 @@ bool try_connect_camera(AppConfig& config, EventCamera::BiasManager& bias_mgr,
     app_state->feature_manager().register_feature(std::make_shared<EventCamera::ROIFeature>(app_state->roi_filter(), app_state->display_settings()));
     app_state->feature_manager().register_feature(std::make_shared<EventCamera::MonitoringFeature>());
 
-    app_state->feature_manager().initialize_all(*cam_info.camera);
-    std::cout << "Hardware features initialized\n" << std::endl;
+    // Initialize features on ALL cameras
+    for (int i = 0; i < num_cameras; ++i) {
+        auto& cam = app_state->camera_state().camera_manager()->get_camera(i);
+        std::cout << "Initializing features for Camera " << i << "..." << std::endl;
+        app_state->feature_manager().initialize_all(*cam.camera);
+    }
+    std::cout << "Hardware features initialized on all cameras\n" << std::endl;
 
-    // Apply Trail Filter settings from config
+    // Apply Trail Filter settings from config to ALL cameras
     auto trail_filter = std::dynamic_pointer_cast<EventCamera::TrailFilterFeature>(
         app_state->feature_manager().get_feature("Trail Filter"));
     if (trail_filter && trail_filter->is_available()) {
@@ -383,13 +388,18 @@ bool try_connect_camera(AppConfig& config, EventCamera::BiasManager& bias_mgr,
             case 2: type = Metavision::I_EventTrailFilterModule::Type::STC_KEEP_TRAIL; break;
             default: type = Metavision::I_EventTrailFilterModule::Type::STC_KEEP_TRAIL; break;
         }
-        trail_filter->set_type(type);
-        trail_filter->set_threshold(config.camera_settings().trail_filter_threshold);
-        trail_filter->enable(config.camera_settings().trail_filter_enabled);
-        std::cout << "Trail Filter configured from config: "
-                  << (config.camera_settings().trail_filter_enabled ? "enabled" : "disabled")
-                  << ", type=" << config.camera_settings().trail_filter_type
-                  << ", threshold=" << config.camera_settings().trail_filter_threshold << "μs" << std::endl;
+
+        // Apply to all cameras
+        for (int i = 0; i < num_cameras; ++i) {
+            auto& cam = app_state->camera_state().camera_manager()->get_camera(i);
+            trail_filter->set_type(type);
+            trail_filter->set_threshold(config.camera_settings().trail_filter_threshold);
+            trail_filter->enable(config.camera_settings().trail_filter_enabled);
+            std::cout << "Trail Filter configured for Camera " << i << " from config: "
+                      << (config.camera_settings().trail_filter_enabled ? "enabled" : "disabled")
+                      << ", type=" << config.camera_settings().trail_filter_type
+                      << ", threshold=" << config.camera_settings().trail_filter_threshold << "μs" << std::endl;
+        }
     }
 
     // Create frame generators and set up event callbacks for all cameras
@@ -1381,10 +1391,14 @@ int main(int argc, char* argv[]) {
                         config.camera_settings().bias_hpf = clamped_genome.bias_hpf;
                         config.camera_settings().accumulation_time_s = clamped_genome.accumulation_time_s;
 
-                        auto& cam_info = app_state->camera_state().camera_manager()->get_camera(0);
-                        apply_bias_settings(*cam_info.camera, config.camera_settings());
+                        // Apply to ALL cameras
+                        int num_cameras = app_state->camera_state().num_cameras();
+                        for (int i = 0; i < num_cameras; ++i) {
+                            auto& cam_info = app_state->camera_state().camera_manager()->get_camera(i);
+                            apply_bias_settings(*cam_info.camera, config.camera_settings());
+                        }
 
-                        std::cout << "Applied best GA parameters to camera (clamped to hardware limits)" << std::endl;
+                        std::cout << "Applied best GA parameters to all cameras (clamped to hardware limits)" << std::endl;
                     }
                 }
             } else {
