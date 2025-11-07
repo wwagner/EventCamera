@@ -82,17 +82,6 @@ std::shared_ptr<IHardwareFeature> FeatureManager::get_feature(const std::string&
 void FeatureManager::render_all_ui() {
     std::lock_guard<std::mutex> lock(mutex_);
 
-    // Debug: log how many features we have and how many are available
-    int available_count = 0;
-    for (auto& feature : features_) {
-        if (feature->is_available()) {
-            available_count++;
-        }
-    }
-
-    std::cout << "[FeatureManager] render_all_ui: " << features_.size()
-              << " registered, " << available_count << " available" << std::endl;
-
     // Render features organized by category
     for (auto& feature : features_) {
         if (feature->is_available()) {
@@ -102,8 +91,6 @@ void FeatureManager::render_all_ui() {
                 std::cerr << "Error rendering UI for feature " << feature->name()
                          << ": " << e.what() << std::endl;
             }
-        } else {
-            std::cout << "  Feature " << feature->name() << " not available" << std::endl;
         }
     }
 }
