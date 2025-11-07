@@ -42,6 +42,14 @@
 #include "app_config.h"
 #include "event_camera_genetic_optimizer.h"
 
+// Camera features
+#include "camera/features/erc_feature.h"
+#include "camera/features/antiflicker_feature.h"
+#include "camera/features/trail_filter_feature.h"
+#include "camera/features/digital_crop_feature.h"
+#include "camera/features/roi_feature.h"
+#include "camera/features/monitoring_feature.h"
+
 // Application state module
 #include "core/app_state.h"
 
@@ -348,7 +356,19 @@ bool try_connect_camera(AppConfig& config, EventCamera::BiasManager& bias_mgr,
     } else {
         std::cerr << "Warning: Failed to initialize BiasManager with new camera" << std::endl;
     }
-    
+
+    // Register and initialize hardware features
+    std::cout << "\nRegistering hardware features..." << std::endl;
+    app_state->feature_manager().register_feature(std::make_shared<EventCamera::ERCFeature>());
+    app_state->feature_manager().register_feature(std::make_shared<EventCamera::AntiFlickerFeature>());
+    app_state->feature_manager().register_feature(std::make_shared<EventCamera::TrailFilterFeature>());
+    app_state->feature_manager().register_feature(std::make_shared<EventCamera::DigitalCropFeature>(app_state->display_settings()));
+    app_state->feature_manager().register_feature(std::make_shared<EventCamera::ROIFeature>(app_state->roi_filter(), app_state->display_settings()));
+    app_state->feature_manager().register_feature(std::make_shared<EventCamera::MonitoringFeature>());
+
+    app_state->feature_manager().initialize_all(*cam_info.camera);
+    std::cout << "Hardware features initialized\n" << std::endl;
+
     // Create frame generator
     const uint32_t accumulation_time_us = static_cast<uint32_t>(
         config.camera_settings().accumulation_time_s * 1000000);

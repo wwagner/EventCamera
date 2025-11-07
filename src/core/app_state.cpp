@@ -21,6 +21,7 @@ AppState::AppState() {
     event_metrics_ = std::make_unique<EventMetrics>();
     display_settings_ = std::make_unique<DisplaySettings>();
     camera_state_ = std::make_unique<CameraState>();
+    feature_manager_ = std::make_unique<EventCamera::FeatureManager>();
 }
 
 AppState::~AppState() = default;
@@ -59,6 +60,10 @@ DisplaySettings& AppState::display_settings() {
 
 CameraState& AppState::camera_state() {
     return *camera_state_;
+}
+
+EventCamera::FeatureManager& AppState::feature_manager() {
+    return *feature_manager_;
 }
 
 bool AppState::is_running() const {

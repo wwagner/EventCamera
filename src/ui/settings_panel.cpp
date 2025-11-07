@@ -458,6 +458,10 @@ void SettingsPanel::render_digital_features() {
         return;
     }
 
+    // Use FeatureManager to render all digital features
+    state_.feature_manager().render_all_ui();
+
+    /* OLD MANUAL CODE - REPLACED BY FEATUREMANAGER
     auto& cam_info = state_.camera_state().camera_manager()->get_camera(0);
 
     // ERC (Event Rate Controller)
@@ -759,6 +763,7 @@ void SettingsPanel::render_digital_features() {
             ImGui::TreePop();
         }
     }
+    */
 }
 
 void SettingsPanel::render_genetic_algorithm() {

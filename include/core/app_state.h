@@ -9,6 +9,7 @@
 #include "video/texture_manager.h"
 #include "video/filters/roi_filter.h"
 #include "video/filters/subtraction_filter.h"
+#include "camera/feature_manager.h"
 
 #include <memory>
 #include <atomic>
@@ -86,6 +87,12 @@ public:
      */
     CameraState& camera_state();
 
+    /**
+     * Get feature manager
+     * @return Reference to feature manager
+     */
+    EventCamera::FeatureManager& feature_manager();
+
     // === Running State ===
 
     /**
@@ -117,6 +124,7 @@ private:
     std::unique_ptr<EventMetrics> event_metrics_;
     std::unique_ptr<DisplaySettings> display_settings_;
     std::unique_ptr<CameraState> camera_state_;
+    std::unique_ptr<EventCamera::FeatureManager> feature_manager_;
 };
 
 } // namespace core
