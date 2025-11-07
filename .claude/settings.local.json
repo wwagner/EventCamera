@@ -10,7 +10,20 @@
       "Bash(git add:*)",
       "Bash(cmake --build:*)",
       "Bash(git commit:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(cmake:*)",
+      "WebFetch(domain:fiji.sc)",
+      "Bash(curl:*)",
+      "Bash(findstr:*)",
+      "Bash(tar:*)",
+      "Bash(tasklist:*)",
+      "Bash(del \"C:\\Users\\wolfw\\source\\repos\\EventCamera\\build\\bin\\Release\\event_camera_viewer.exe\")",
+      "Bash(Select-String \"settings_panel\")",
+      "Bash(git checkout:*)",
+      "Bash(Select-String -Pattern \"error|undefined|undeclared\")",
+      "Bash(Select-Object -First 20)",
+      "Bash(Select-String \"error C\")",
+      "Bash(Select-Object -First 30)"
     ],
     "deny": [],
     "ask": []

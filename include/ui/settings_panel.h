@@ -30,6 +30,14 @@ public:
     void render() override;
     std::string title() const override { return "Camera Settings"; }
 
+    bool settings_changed() const { return settings_changed_; }
+    void reset_settings_changed() { settings_changed_ = false; }
+
+    bool camera_reconnect_requested() const { return camera_reconnect_requested_; }
+    void reset_camera_reconnect_request() { camera_reconnect_requested_ = false; }
+    bool camera_connect_requested() const { return camera_connect_requested_; }
+    void reset_camera_connect_request() { camera_connect_requested_ = false; }
+
 private:
     void render_connection_controls();
     void render_bias_controls();
@@ -43,6 +51,8 @@ private:
     EventCamera::BiasManager& bias_mgr_;
 
     bool settings_changed_ = false;
+    bool camera_reconnect_requested_ = false;
+    bool camera_connect_requested_ = false;
     AppConfig::CameraSettings previous_settings_;
 };
 
