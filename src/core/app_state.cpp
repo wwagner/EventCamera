@@ -5,10 +5,13 @@
 namespace core {
 
 AppState::AppState() {
-    // Initialize video subsystems
-    frame_buffer_ = std::make_unique<video::FrameBuffer>();
+    // Initialize video subsystems for dual cameras
+    for (int i = 0; i < MAX_CAMERAS; ++i) {
+        frame_buffers_[i] = std::make_unique<video::FrameBuffer>();
+        texture_managers_[i] = std::make_unique<video::TextureManager>();
+    }
+
     frame_processor_ = std::make_unique<video::FrameProcessor>();
-    texture_manager_ = std::make_unique<video::TextureManager>();
 
     // Create and register video filters
     roi_filter_ = std::make_shared<video::ROIFilter>();
@@ -26,16 +29,16 @@ AppState::AppState() {
 
 AppState::~AppState() = default;
 
-video::FrameBuffer& AppState::frame_buffer() {
-    return *frame_buffer_;
+video::FrameBuffer& AppState::frame_buffer(int camera_index) {
+    return *frame_buffers_[camera_index];
 }
 
 video::FrameProcessor& AppState::frame_processor() {
     return *frame_processor_;
 }
 
-video::TextureManager& AppState::texture_manager() {
-    return *texture_manager_;
+video::TextureManager& AppState::texture_manager(int camera_index) {
+    return *texture_managers_[camera_index];
 }
 
 std::shared_ptr<video::ROIFilter> AppState::roi_filter() {

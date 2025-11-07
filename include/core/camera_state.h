@@ -71,16 +71,23 @@ public:
     std::unique_ptr<CameraManager>& camera_manager();
 
     /**
-     * Get frame generator
+     * Get frame generator for camera index
+     * @param camera_index Camera index (0 or 1)
      * @return Reference to frame generator unique_ptr
      */
-    std::unique_ptr<Metavision::PeriodicFrameGenerationAlgorithm>& frame_generator();
+    std::unique_ptr<Metavision::PeriodicFrameGenerationAlgorithm>& frame_generator(int camera_index = 0);
 
     /**
-     * Get event processing thread
+     * Get event processing thread for camera index
+     * @param camera_index Camera index (0 or 1)
      * @return Reference to event thread unique_ptr
      */
-    std::unique_ptr<std::thread>& event_thread();
+    std::unique_ptr<std::thread>& event_thread(int camera_index = 0);
+
+    /**
+     * Get number of active cameras
+     */
+    int num_cameras() const;
 
     /**
      * Get connection mutex
@@ -89,9 +96,11 @@ public:
     std::mutex& connection_mutex();
 
 private:
+    static constexpr int MAX_CAMERAS = 2;
+
     std::unique_ptr<CameraManager> camera_mgr_;
-    std::unique_ptr<Metavision::PeriodicFrameGenerationAlgorithm> frame_gen_;
-    std::unique_ptr<std::thread> event_thread_;
+    std::unique_ptr<Metavision::PeriodicFrameGenerationAlgorithm> frame_gens_[MAX_CAMERAS];
+    std::unique_ptr<std::thread> event_threads_[MAX_CAMERAS];
     std::atomic<bool> camera_connected_{false};
     std::atomic<bool> simulation_mode_{false};
     std::atomic<int64_t> camera_start_time_us_{0};

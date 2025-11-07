@@ -81,19 +81,19 @@ struct GAState {
  * Store frame in frame buffer
  * Implements frame dropping to prevent queue buildup and maintain real-time display
  */
-void update_texture(const cv::Mat& frame) {
+void update_texture(const cv::Mat& frame, int camera_index) {
     if (frame.empty() || !app_state) return;
-    app_state->frame_buffer().store_frame(frame);
+    app_state->frame_buffer(camera_index).store_frame(frame);
 }
 
 /**
  * Upload OpenCV frame to OpenGL texture
  */
-void upload_frame_to_gpu() {
+void upload_frame_to_gpu(int camera_index) {
     if (!app_state) return;
 
     // Try to consume a frame from the buffer
-    auto frame_opt = app_state->frame_buffer().consume_frame();
+    auto frame_opt = app_state->frame_buffer(camera_index).consume_frame();
     if (!frame_opt.has_value()) {
         return;  // No new frame available
     }
@@ -102,7 +102,7 @@ void upload_frame_to_gpu() {
     cv::Mat processed_frame = app_state->frame_processor().process(frame_opt.value());
 
     // Upload to GPU texture
-    app_state->texture_manager().upload_frame(processed_frame);
+    app_state->texture_manager(camera_index).upload_frame(processed_frame);
 }
 
 /**
@@ -205,7 +205,7 @@ EventCameraGeneticOptimizer::FitnessResult evaluate_genome_fitness(
                 if (app_state->frame_sync().should_display_frame(now_us, fps_target)) {
                     app_state->frame_sync().on_frame_generated(ts, now_us);
                     app_state->frame_sync().on_frame_displayed(now_us);
-                    update_texture(frame);
+                    update_texture(frame, 0);  // GA test uses camera 0
                 }
             });
         }
@@ -392,97 +392,105 @@ bool try_connect_camera(AppConfig& config, EventCamera::BiasManager& bias_mgr,
                   << ", threshold=" << config.camera_settings().trail_filter_threshold << "μs" << std::endl;
     }
 
-    // Create frame generator
+    // Create frame generators and set up event callbacks for all cameras
     const uint32_t accumulation_time_us = static_cast<uint32_t>(
         config.camera_settings().accumulation_time_s * 1000000);
 
-    int width = app_state->display_settings().get_image_width();
-    int height = app_state->display_settings().get_image_height();
-    app_state->camera_state().frame_generator() = std::make_unique<Metavision::PeriodicFrameGenerationAlgorithm>(
-        width, height, accumulation_time_us);
+    // num_cameras already defined above from camera initialization
+    for (int i = 0; i < num_cameras; ++i) {
+        auto& cam_info = app_state->camera_state().camera_manager()->get_camera(i);
 
-    // Set up frame generator output callback (must be done before starting camera)
-    app_state->camera_state().frame_generator()->set_output_callback([](const Metavision::timestamp ts, cv::Mat& frame) {
-        if (frame.empty() || !app_state) return;
+        // Get camera geometry
+        const auto& geom = cam_info.camera->geometry();
+        uint16_t width = geom.width();
+        uint16_t height = geom.height();
 
-        // Rate limit display updates to target FPS
-        auto now = std::chrono::steady_clock::now();
-        auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
-        int fps_target = app_state->display_settings().get_target_fps();
+        // Create frame generator for this camera
+        app_state->camera_state().frame_generator(i) = std::make_unique<Metavision::PeriodicFrameGenerationAlgorithm>(
+            width, height, accumulation_time_us);
 
-        // Check if enough time has passed since last display
-        if (app_state->frame_sync().should_display_frame(now_us, fps_target)) {
-            app_state->frame_sync().on_frame_generated(ts, now_us);
-            app_state->frame_sync().on_frame_displayed(now_us);
-            update_texture(frame);  // Uses FrameBuffer which handles dropping
-        }
-        // Note: frame_buffer tracks its own dropped/generated statistics
-    });
+        // Set up frame generator output callback (must be done before starting camera)
+        int camera_index = i;  // Capture by value for lambda
+        app_state->camera_state().frame_generator(i)->set_output_callback(
+            [camera_index](const Metavision::timestamp ts, cv::Mat& frame) {
+                if (frame.empty() || !app_state) return;
+
+                // Rate limit display updates to target FPS
+                auto now = std::chrono::steady_clock::now();
+                auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
+                int fps_target = app_state->display_settings().get_target_fps();
+
+                // Check if enough time has passed since last display
+                if (app_state->frame_sync().should_display_frame(now_us, fps_target)) {
+                    app_state->frame_sync().on_frame_generated(ts, now_us);
+                    app_state->frame_sync().on_frame_displayed(now_us);
+                    update_texture(frame, camera_index);  // Uses FrameBuffer which handles dropping
+                }
+                // Note: frame_buffer tracks its own dropped/generated statistics
+            });
+
+        // Set up event callback to feed events to frame generator
+        cam_info.camera->cd().add_callback(
+            [camera_index](const Metavision::EventCD* begin, const Metavision::EventCD* end) {
+                if (begin == end || !app_state) return;
+
+                // Get current time
+                auto now = std::chrono::steady_clock::now();
+                auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
+
+                // Count events for event rate calculation
+                int64_t event_count = end - begin;
+
+                // Track last event timestamp to measure event latency
+                Metavision::timestamp last_ts = (end-1)->t;
+
+                // Record events for metrics
+                app_state->event_metrics().record_events(event_count, now_us);
+                app_state->event_metrics().record_event_timestamp(last_ts);
+
+                // CRITICAL: Skip old event batches to prevent latency buildup
+                // Check age of newest event - if old, skip entire batch
+                int64_t cam_start = app_state->camera_state().get_camera_start_time_us();
+                Metavision::timestamp newest_event_ts = (end-1)->t;
+                int64_t newest_event_system_ts = cam_start + newest_event_ts;
+                int64_t event_age_us = now_us - newest_event_system_ts;
+
+                // Skip batches with events older than 100ms to stay current
+                if (event_age_us > 100000) {  // 100ms threshold
+                    // Skip old data - don't process into frame generator
+                    return;
+                }
+
+                // Process recent event batches
+                std::lock_guard<std::mutex> lock(framegen_mutex);
+                if (app_state && app_state->camera_state().frame_generator(camera_index)) {
+                    app_state->camera_state().frame_generator(camera_index)->process_events(begin, end);
+                }
+            });
+
+        std::cout << "Frame generator and event callback configured for camera " << i
+                  << " (" << cam_info.serial << ")" << std::endl;
+    }
 
     if (!start_camera) {
-        // Camera initialized but not started - caller will start it later
+        // Cameras initialized but not started - caller will start them later
         app_state->camera_state().set_connected(true);
         app_state->camera_state().set_simulation_mode(false);
-        std::cout << "Camera connected but not started (will start after UI initialization)" << std::endl;
+        std::cout << "Cameras connected but not started (will start after UI initialization)" << std::endl;
         return true;
     }
 
-    // Start camera
+    // Start all cameras
     auto start_time = std::chrono::steady_clock::now();
     int64_t start_time_us = std::chrono::duration_cast<std::chrono::microseconds>(start_time.time_since_epoch()).count();
     app_state->camera_state().set_camera_start_time_us(start_time_us);
 
-    cam_info.camera->start();
-    std::cout << "Camera started: " << cam_info.serial << std::endl;
+    for (int i = 0; i < num_cameras; ++i) {
+        auto& cam_info = app_state->camera_state().camera_manager()->get_camera(i);
+        cam_info.camera->start();
+        std::cout << "Camera " << i << " started: " << cam_info.serial << std::endl;
+    }
 
-    // Start camera event thread
-    app_state->camera_state().event_thread() = std::make_unique<std::thread>([&]() {
-        auto& cam_info = app_state->camera_state().camera_manager()->get_camera(0);
-        auto& camera = cam_info.camera;
-
-        camera->cd().add_callback([&](const Metavision::EventCD* begin,
-                                     const Metavision::EventCD* end) {
-            if (begin == end || !app_state) return;
-
-            // Get current time
-            auto now = std::chrono::steady_clock::now();
-            auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
-
-            // Count events for event rate calculation
-            int64_t event_count = end - begin;
-
-            // Track last event timestamp to measure event latency
-            Metavision::timestamp last_ts = (end-1)->t;
-
-            // Record events for metrics
-            app_state->event_metrics().record_events(event_count, now_us);
-            app_state->event_metrics().record_event_timestamp(last_ts);
-
-            // CRITICAL: Skip old event batches to prevent latency buildup
-            // Check age of newest event - if old, skip entire batch
-            int64_t cam_start = app_state->camera_state().get_camera_start_time_us();
-            Metavision::timestamp newest_event_ts = (end-1)->t;
-            int64_t newest_event_system_ts = cam_start + newest_event_ts;
-            int64_t event_age_us = now_us - newest_event_system_ts;
-
-            // Skip batches with events older than 100ms to stay current
-            if (event_age_us > 100000) {  // 100ms threshold
-                // Skip old data - don't process into frame generator
-                return;
-            }
-
-            // Process recent event batches
-            std::lock_guard<std::mutex> lock(framegen_mutex);
-            if (app_state && app_state->camera_state().frame_generator()) {
-                app_state->camera_state().frame_generator()->process_events(begin, end);
-            }
-        });
-
-        while (app_state && app_state->is_running() && camera->is_running()) {
-            std::this_thread::sleep_for(std::chrono::microseconds(100));  // 0.1ms for low latency
-        }
-    });
-    
     app_state->camera_state().set_connected(true);
     app_state->camera_state().set_simulation_mode(false);
 
@@ -689,7 +697,7 @@ int main(int argc, char* argv[]) {
                 phase += 0.02f;
 
                 // Update the frame
-                update_texture(sim_frame);
+                update_texture(sim_frame, 0);  // Simulation uses camera 0
 
                 // Sleep to simulate frame rate
                 std::this_thread::sleep_for(std::chrono::milliseconds(33));  // ~30 FPS
@@ -1435,39 +1443,71 @@ int main(int argc, char* argv[]) {
         }
         // ImGui::End(); // TEMP: Commented out - Advanced window disabled
 
-        // Camera view window
-        // Size window to match camera aspect ratio
+        // Dual camera view windows - stacked vertically
+        int num_cameras = app_state->camera_state().num_cameras();
         float camera_aspect = static_cast<float>(app_state->display_settings().get_image_width()) / app_state->display_settings().get_image_height();
         float feed_window_width = window_width - 450;
-        float feed_window_height = (feed_window_width / camera_aspect) + 50;  // +50 for window chrome
+        float single_feed_height = (feed_window_width / camera_aspect) + 30;  // +30 for window chrome
 
-        ImGui::SetNextWindowPos(ImVec2(440, 10), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(feed_window_width, feed_window_height),
-                                ImGuiCond_FirstUseEver);
+        // Camera 0 (Top)
+        if (num_cameras > 0) {
+            ImGui::SetNextWindowPos(ImVec2(440, 10), ImGuiCond_FirstUseEver);
+            ImGui::SetNextWindowSize(ImVec2(feed_window_width, single_feed_height), ImGuiCond_FirstUseEver);
 
-        if (ImGui::Begin("Camera Feed")) {
-            upload_frame_to_gpu();
+            if (ImGui::Begin("Camera 0")) {
+                upload_frame_to_gpu(0);
 
-            if (app_state->texture_manager().get_texture_id() != 0) {
-                ImVec2 window_size = ImGui::GetContentRegionAvail();
+                if (app_state->texture_manager(0).get_texture_id() != 0) {
+                    ImVec2 window_size = ImGui::GetContentRegionAvail();
 
-                // Maintain aspect ratio
-                float aspect = static_cast<float>(app_state->texture_manager().get_width()) / app_state->texture_manager().get_height();
-                float display_width = window_size.x;
-                float display_height = display_width / aspect;
+                    // Maintain aspect ratio
+                    float aspect = static_cast<float>(app_state->texture_manager(0).get_width()) / app_state->texture_manager(0).get_height();
+                    float display_width = window_size.x;
+                    float display_height = display_width / aspect;
 
-                if (display_height > window_size.y) {
-                    display_height = window_size.y;
-                    display_width = display_height * aspect;
+                    if (display_height > window_size.y) {
+                        display_height = window_size.y;
+                        display_width = display_height * aspect;
+                    }
+
+                    ImGui::Image((void*)(intptr_t)app_state->texture_manager(0).get_texture_id(),
+                               ImVec2(display_width, display_height));
+                } else {
+                    ImGui::Text("Waiting for camera 0 frames...");
                 }
-
-                ImGui::Image((void*)(intptr_t)app_state->texture_manager().get_texture_id(),
-                           ImVec2(display_width, display_height));
-            } else {
-                ImGui::Text("Waiting for camera frames...");
             }
+            ImGui::End();
         }
-        ImGui::End();
+
+        // Camera 1 (Bottom)
+        if (num_cameras > 1) {
+            ImGui::SetNextWindowPos(ImVec2(440, 20 + single_feed_height), ImGuiCond_FirstUseEver);
+            ImGui::SetNextWindowSize(ImVec2(feed_window_width, single_feed_height), ImGuiCond_FirstUseEver);
+
+            if (ImGui::Begin("Camera 1")) {
+                upload_frame_to_gpu(1);
+
+                if (app_state->texture_manager(1).get_texture_id() != 0) {
+                    ImVec2 window_size = ImGui::GetContentRegionAvail();
+
+                    // Maintain aspect ratio
+                    float aspect = static_cast<float>(app_state->texture_manager(1).get_width()) / app_state->texture_manager(1).get_height();
+                    float display_width = window_size.x;
+                    float display_height = display_width / aspect;
+
+                    if (display_height > window_size.y) {
+                        display_height = window_size.y;
+                        display_width = display_height * aspect;
+                    }
+
+                    ImGui::Image((void*)(intptr_t)app_state->texture_manager(1).get_texture_id(),
+                               ImVec2(display_width, display_height));
+                } else {
+                    ImGui::Text("Waiting for camera 1 frames...");
+                }
+            }
+            ImGui::End();
+        }
 
         // Render
         ImGui::Render();

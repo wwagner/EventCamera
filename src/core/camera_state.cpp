@@ -32,12 +32,17 @@ std::unique_ptr<CameraManager>& CameraState::camera_manager() {
     return camera_mgr_;
 }
 
-std::unique_ptr<Metavision::PeriodicFrameGenerationAlgorithm>& CameraState::frame_generator() {
-    return frame_gen_;
+std::unique_ptr<Metavision::PeriodicFrameGenerationAlgorithm>& CameraState::frame_generator(int camera_index) {
+    return frame_gens_[camera_index];
 }
 
-std::unique_ptr<std::thread>& CameraState::event_thread() {
-    return event_thread_;
+std::unique_ptr<std::thread>& CameraState::event_thread(int camera_index) {
+    return event_threads_[camera_index];
+}
+
+int CameraState::num_cameras() const {
+    if (!camera_mgr_) return 0;
+    return camera_mgr_->num_cameras();
 }
 
 std::mutex& CameraState::connection_mutex() {

@@ -34,10 +34,11 @@ public:
     // === Subsystem Access ===
 
     /**
-     * Get frame buffer
+     * Get frame buffer for camera index
+     * @param camera_index Camera index (0 or 1)
      * @return Reference to frame buffer
      */
-    video::FrameBuffer& frame_buffer();
+    video::FrameBuffer& frame_buffer(int camera_index = 0);
 
     /**
      * Get frame processor
@@ -46,10 +47,11 @@ public:
     video::FrameProcessor& frame_processor();
 
     /**
-     * Get texture manager
+     * Get texture manager for camera index
+     * @param camera_index Camera index (0 or 1)
      * @return Reference to texture manager
      */
-    video::TextureManager& texture_manager();
+    video::TextureManager& texture_manager(int camera_index = 0);
 
     /**
      * Get ROI filter
@@ -112,12 +114,13 @@ public:
     void reset_running_flag();
 
 private:
+    static constexpr int MAX_CAMERAS = 2;
     std::atomic<bool> running_{true};
 
     // Subsystem instances
-    std::unique_ptr<video::FrameBuffer> frame_buffer_;
+    std::unique_ptr<video::FrameBuffer> frame_buffers_[MAX_CAMERAS];
     std::unique_ptr<video::FrameProcessor> frame_processor_;
-    std::unique_ptr<video::TextureManager> texture_manager_;
+    std::unique_ptr<video::TextureManager> texture_managers_[MAX_CAMERAS];
     std::shared_ptr<video::ROIFilter> roi_filter_;
     std::shared_ptr<video::SubtractionFilter> subtraction_filter_;
     std::unique_ptr<FrameSync> frame_sync_;
