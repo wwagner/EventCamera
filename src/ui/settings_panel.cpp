@@ -826,8 +826,88 @@ void SettingsPanel::render_digital_features() {
 }
 
 void SettingsPanel::render_genetic_algorithm() {
-    ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "GA controls shown here when camera connected");
-    // This will be implemented by moving GA UI code from main.cpp
+    auto& ga_cfg = config_.ga_settings();
+
+    // Cluster-based fitness evaluation
+    ImGui::Text("Cluster-Based Fitness Evaluation:");
+    ImGui::Spacing();
+
+    if (ImGui::Checkbox("Enable Cluster Filter", &ga_cfg.enable_cluster_filter)) {
+        settings_changed_ = true;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Focus fitness evaluation on circular clusters, suppressing single-pixel noise elsewhere");
+    }
+
+    if (ga_cfg.enable_cluster_filter) {
+        ImGui::Indent();
+
+        // Cluster radius slider
+        if (ImGui::SliderInt("Cluster Radius (pixels)", &ga_cfg.cluster_radius, 10, 100)) {
+            settings_changed_ = true;
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Radius of circular cluster regions in pixels");
+        }
+
+        ImGui::Spacing();
+        ImGui::Text("Cluster Centers (x, y):");
+
+        // Display existing clusters with remove buttons
+        std::vector<int> to_remove;
+        for (size_t i = 0; i < ga_cfg.cluster_centers.size(); ++i) {
+            ImGui::PushID(static_cast<int>(i));
+
+            auto& center = ga_cfg.cluster_centers[i];
+            ImGui::Text("  [%d] (%d, %d)", static_cast<int>(i), center.first, center.second);
+            ImGui::SameLine();
+
+            if (ImGui::SmallButton("Remove")) {
+                to_remove.push_back(static_cast<int>(i));
+                settings_changed_ = true;
+            }
+
+            ImGui::PopID();
+        }
+
+        // Remove marked clusters (in reverse order to maintain indices)
+        for (auto it = to_remove.rbegin(); it != to_remove.rend(); ++it) {
+            ga_cfg.cluster_centers.erase(ga_cfg.cluster_centers.begin() + *it);
+        }
+
+        // Add new cluster controls
+        ImGui::Spacing();
+        static int new_cluster_x = 320;  // Center of 640x480 image
+        static int new_cluster_y = 240;
+
+        ImGui::InputInt("New Cluster X", &new_cluster_x);
+        ImGui::InputInt("New Cluster Y", &new_cluster_y);
+
+        if (ImGui::Button("Add Cluster")) {
+            ga_cfg.cluster_centers.emplace_back(new_cluster_x, new_cluster_y);
+            settings_changed_ = true;
+        }
+
+        ImGui::SameLine();
+        if (ImGui::Button("Clear All Clusters")) {
+            ga_cfg.cluster_centers.clear();
+            settings_changed_ = true;
+        }
+
+        ImGui::Spacing();
+        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.0f, 1.0f),
+                          "Tip: Add clusters at locations where you expect");
+        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.0f, 1.0f),
+                          "events (e.g., LEDs, moving objects)");
+
+        ImGui::Unindent();
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+    ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
+                      "Other GA settings can be configured in event_config.ini");
 }
 
 void SettingsPanel::apply_digital_features_to_all_cameras() {

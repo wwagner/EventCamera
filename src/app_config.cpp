@@ -281,6 +281,27 @@ bool AppConfig::load(const std::string& filename) {
             else if (key == "optimize_trail_filter") ga_settings_.optimize_trail_filter = (std::stoi(value) != 0);
             else if (key == "optimize_antiflicker") ga_settings_.optimize_antiflicker = (std::stoi(value) != 0);
             else if (key == "optimize_erc") ga_settings_.optimize_erc = (std::stoi(value) != 0);
+            else if (key == "enable_cluster_filter") ga_settings_.enable_cluster_filter = (std::stoi(value) != 0);
+            else if (key == "cluster_radius") ga_settings_.cluster_radius = std::stoi(value);
+            else if (key == "cluster_centers") {
+                // Parse cluster centers format: "x1,y1;x2,y2;x3,y3"
+                ga_settings_.cluster_centers.clear();
+                std::stringstream ss(value);
+                std::string pair_str;
+                while (std::getline(ss, pair_str, ';')) {
+                    std::stringstream pair_ss(pair_str);
+                    std::string x_str, y_str;
+                    if (std::getline(pair_ss, x_str, ',') && std::getline(pair_ss, y_str, ',')) {
+                        try {
+                            int x = std::stoi(x_str);
+                            int y = std::stoi(y_str);
+                            ga_settings_.cluster_centers.emplace_back(x, y);
+                        } catch (...) {
+                            // Skip invalid pairs
+                        }
+                    }
+                }
+            }
         }
     }
 

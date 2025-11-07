@@ -75,6 +75,10 @@ struct GAState {
     // Frames for fitness evaluation
     std::vector<cv::Mat> captured_frames;
     std::mutex frames_mutex;
+
+    // Flag to enable GA frame capture
+    std::atomic<bool> capturing_for_ga{false};
+    video::FrameBuffer ga_frame_buffer;  // Dedicated buffer for GA
 } ga_state;
 
 /**
@@ -196,6 +200,11 @@ EventCameraGeneticOptimizer::FitnessResult evaluate_genome_fitness(
             app_state->camera_state().frame_generator()->set_output_callback([](const Metavision::timestamp ts, cv::Mat& frame) {
                 if (frame.empty() || !app_state) return;
 
+                // If GA is capturing, store in GA buffer
+                if (ga_state.capturing_for_ga) {
+                    ga_state.ga_frame_buffer.store_frame(frame.clone());
+                }
+
                 // Rate limit display updates to target FPS
                 auto now = std::chrono::steady_clock::now();
                 auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
@@ -236,48 +245,121 @@ EventCameraGeneticOptimizer::FitnessResult evaluate_genome_fitness(
         }
     }
     
-    // Wait for parameters to stabilize (reduced for faster GA)
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    
-    // Capture frames
+    // Wait for parameters to stabilize
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    // Enable GA frame capture
+    ga_state.capturing_for_ga = true;
+
+    // Capture frames using dedicated GA buffer
     std::vector<cv::Mat> captured_frames;
     captured_frames.reserve(num_frames);
-    
-    for (int i = 0; i < num_frames; ++i) {
-        // Try to get a frame from the buffer
-        if (app_state) {
-            auto frame_opt = app_state->frame_buffer().consume_frame();
-            if (frame_opt.has_value() && !frame_opt.value().empty()) {
-                captured_frames.push_back(frame_opt.value());
-            }
+
+    int max_attempts = num_frames * 10;  // Try 10x as many times
+    int attempts = 0;
+
+    while (captured_frames.size() < static_cast<size_t>(num_frames) && attempts < max_attempts) {
+        auto frame_opt = ga_state.ga_frame_buffer.consume_frame();
+        if (frame_opt.has_value() && !frame_opt.value().empty()) {
+            captured_frames.push_back(frame_opt.value());
         }
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));  // Fast frame capture for GA
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));  // Wait between attempts
+        attempts++;
     }
-    
+
+    // Disable GA frame capture
+    ga_state.capturing_for_ga = false;
+
     // Calculate fitness metrics from captured frames
     if (captured_frames.empty()) {
+        std::cerr << "GA ERROR: No frames captured after " << attempts << " attempts. "
+                  << "Check camera streaming and frame generation!" << std::endl;
         result.combined_fitness = 1e9f;  // Very bad fitness
         return result;
+    }
+
+    if (captured_frames.size() < static_cast<size_t>(num_frames)) {
+        std::cerr << "GA WARNING: Only captured " << captured_frames.size()
+                  << "/" << num_frames << " frames" << std::endl;
     }
 
     result.num_valid_frames = captured_frames.size();
     result.total_frames = num_frames;
 
-    // Calculate contrast (average across all frames)
-    float total_contrast = 0.0f;
-    for (const auto& frame : captured_frames) {
-        total_contrast += EventCameraGeneticOptimizer::calculate_contrast(frame);
+    // If cluster filter is enabled, use cluster-based metrics
+    if (config.ga_settings().enable_cluster_filter && !config.ga_settings().cluster_centers.empty()) {
+        // Calculate cluster-based metrics: reward clustered pixels, penalize isolated noise
+        cv::Mat gray;
+        if (captured_frames[0].channels() == 3) {
+            cv::cvtColor(captured_frames[0], gray, cv::COLOR_BGR2GRAY);
+        } else {
+            gray = captured_frames[0];
+        }
+
+        // Threshold to get binary events
+        cv::Mat binary;
+        cv::threshold(gray, binary, 10, 255, cv::THRESH_BINARY);
+
+        int total_pixels = cv::countNonZero(binary);
+        if (total_pixels == 0) {
+            result.contrast_score = 0.01f;
+            result.noise_metric = 0.0f;
+            result.isolated_pixel_ratio = 0.0f;
+        } else {
+            // Apply erosion to remove isolated single pixels
+            cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
+            cv::Mat eroded;
+            cv::erode(binary, eroded, kernel);
+
+            // Count clustered pixels (survived erosion = truly clustered)
+            int clustered_pixels = cv::countNonZero(eroded);
+
+            // Count isolated pixels (removed by erosion = noise)
+            int isolated_pixels = total_pixels - clustered_pixels;
+
+            // Create mask for cluster regions
+            cv::Mat cluster_mask = cv::Mat::zeros(gray.size(), CV_8U);
+            for (const auto& center : config.ga_settings().cluster_centers) {
+                cv::circle(cluster_mask, cv::Point(center.first, center.second),
+                          config.ga_settings().cluster_radius, cv::Scalar(255), -1);
+            }
+
+            // Count events inside vs outside cluster regions
+            cv::Mat events_in_clusters;
+            cv::bitwise_and(eroded, cluster_mask, events_in_clusters);  // Use eroded (clustered) pixels
+            int events_inside = cv::countNonZero(events_in_clusters);
+
+            cv::Mat events_outside_mat;
+            cv::bitwise_and(binary, ~cluster_mask, events_outside_mat);  // All events outside
+            int events_outside = cv::countNonZero(events_outside_mat);
+
+            // Contrast = clustered pixels in target regions (want HIGH)
+            // Higher is better - more real clustered events in our target areas
+            result.contrast_score = static_cast<float>(events_inside) + 0.1f;  // +0.1 to avoid divide by zero
+
+            // Noise = isolated pixels + events outside regions (want LOW)
+            result.noise_metric = static_cast<float>(isolated_pixels + events_outside);
+
+            result.isolated_pixel_ratio = 0.0f;  // Not used in cluster mode
+        }
+
+    } else {
+        // Standard contrast/noise calculation
+        float total_contrast = 0.0f;
+        for (const auto& frame : captured_frames) {
+            total_contrast += EventCameraGeneticOptimizer::calculate_contrast(frame);
+        }
+        result.contrast_score = total_contrast / captured_frames.size();
+
+        // Calculate noise metrics
+        result.temporal_variance = EventCameraGeneticOptimizer::calculate_temporal_variance(captured_frames);
+        result.spatial_noise = EventCameraGeneticOptimizer::calculate_spatial_noise(captured_frames[0]);
+        result.noise_metric = result.temporal_variance + result.spatial_noise;
+
+        // Calculate isolated pixel ratio (single-pixel noise)
+        result.isolated_pixel_ratio = EventCameraGeneticOptimizer::calculate_isolated_pixels(captured_frames[0]);
     }
-    result.contrast_score = total_contrast / captured_frames.size();
-
-    // Calculate noise metrics
-    result.temporal_variance = EventCameraGeneticOptimizer::calculate_temporal_variance(captured_frames);
-    result.spatial_noise = EventCameraGeneticOptimizer::calculate_spatial_noise(captured_frames[0]);
-    result.noise_metric = result.temporal_variance + result.spatial_noise;
-
-    // Calculate isolated pixel ratio (single-pixel noise)
-    result.isolated_pixel_ratio = EventCameraGeneticOptimizer::calculate_isolated_pixels(captured_frames[0]);
 
     // Calculate total event pixels (bright pixels above threshold)
     cv::Mat gray;

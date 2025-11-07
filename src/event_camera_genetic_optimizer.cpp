@@ -601,3 +601,49 @@ float EventCameraGeneticOptimizer::calculate_isolated_pixels(const cv::Mat& fram
     // Return ratio: 0.0 = all clustered (good), 1.0 = all isolated (bad)
     return isolated_ratio;
 }
+
+float EventCameraGeneticOptimizer::calculate_cluster_fitness(
+    const cv::Mat& frame,
+    const std::vector<std::pair<int, int>>& cluster_centers,
+    int cluster_radius) {
+
+    if (frame.empty() || cluster_centers.empty()) {
+        return 1e6f;  // Invalid
+    }
+
+    // Convert to grayscale if needed
+    cv::Mat gray;
+    if (frame.channels() == 3) {
+        cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
+    } else {
+        gray = frame;
+    }
+
+    // Create mask for cluster regions (circular dots)
+    cv::Mat cluster_mask = cv::Mat::zeros(gray.size(), CV_8U);
+    for (const auto& center : cluster_centers) {
+        cv::circle(cluster_mask, cv::Point(center.first, center.second),
+                  cluster_radius, cv::Scalar(255), -1);  // Filled circle
+    }
+
+    // Calculate mean brightness inside cluster regions
+    cv::Scalar mean_inside = cv::mean(gray, cluster_mask);
+    float brightness_inside = static_cast<float>(mean_inside[0]);
+
+    // Calculate mean brightness outside cluster regions (background)
+    cv::Mat outside_mask = ~cluster_mask;
+    cv::Scalar mean_outside = cv::mean(gray, outside_mask);
+    float brightness_outside = static_cast<float>(mean_outside[0]);
+
+    // Calculate contrast: difference between inside and outside
+    // Higher contrast = better (bright dots, dark background)
+    float contrast = brightness_inside - brightness_outside;
+
+    // Return as fitness (lower is better for optimizer, so negate and normalize)
+    // We want: high contrast (good) and low background noise (good)
+    // fitness = -contrast + background_noise
+    // Normalize: contrast can be 0-255, so we scale appropriately
+    float fitness = -contrast + brightness_outside;
+
+    return fitness;
+}

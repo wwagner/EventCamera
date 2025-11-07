@@ -218,6 +218,18 @@ public:
      */
     static float calculate_isolated_pixels(const cv::Mat& frame);
 
+    /**
+     * Calculate cluster-based fitness metric
+     * Evaluates events within defined circular clusters and penalizes noise outside
+     * @param frame Input frame
+     * @param cluster_centers Vector of (x,y) cluster center positions
+     * @param cluster_radius Radius of each circular cluster
+     * @return Fitness value (lower is better): ratio of events outside clusters + isolated pixel ratio
+     */
+    static float calculate_cluster_fitness(const cv::Mat& frame,
+                                           const std::vector<std::pair<int, int>>& cluster_centers,
+                                           int cluster_radius);
+
 private:
     OptimizerParams params_;
     FitnessCallback fitness_callback_;
