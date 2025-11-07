@@ -425,14 +425,6 @@ bool try_connect_camera(AppConfig& config, EventCamera::BiasManager& bias_mgr,
             auto now = std::chrono::steady_clock::now();
             auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
 
-            // CRITICAL: Skip processing if we're not ready for a new frame yet
-            // This prevents frames from piling up when display is rate-limited
-            int fps_target = app_state->display_settings().get_target_fps();
-            if (!app_state->frame_sync().should_display_frame(now_us, fps_target)) {
-                // Not time for next frame yet - skip this event batch entirely
-                return;
-            }
-
             // Count events for event rate calculation
             int64_t event_count = end - begin;
 
@@ -443,20 +435,20 @@ bool try_connect_camera(AppConfig& config, EventCamera::BiasManager& bias_mgr,
             app_state->event_metrics().record_events(event_count, now_us);
             app_state->event_metrics().record_event_timestamp(last_ts);
 
-            // CRITICAL FIX: Skip ALL old event batches immediately
-            // Check age of newest event - if old, skip entire batch without iterating
+            // CRITICAL: Skip old event batches to prevent latency buildup
+            // Check age of newest event - if old, skip entire batch
             int64_t cam_start = app_state->camera_state().get_camera_start_time_us();
-
             Metavision::timestamp newest_event_ts = (end-1)->t;
             int64_t newest_event_system_ts = cam_start + newest_event_ts;
             int64_t event_age_us = now_us - newest_event_system_ts;
 
-            // Skip any batch where even the newest event is older than 50ms
-            if (event_age_us > 50000) {  // 50ms - be aggressive about skipping old data
-                return;  // Skip entire batch immediately
+            // Skip batches with events older than 100ms to stay current
+            if (event_age_us > 100000) {  // 100ms threshold
+                // Skip old data - don't process into frame generator
+                return;
             }
 
-            // Only process recent batches
+            // Process recent event batches
             std::lock_guard<std::mutex> lock(framegen_mutex);
             if (app_state && app_state->camera_state().frame_generator()) {
                 app_state->camera_state().frame_generator()->process_events(begin, end);
@@ -594,14 +586,6 @@ int main(int argc, char* argv[]) {
                 auto now = std::chrono::steady_clock::now();
                 auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
 
-                // CRITICAL: Skip processing if we're not ready for a new frame yet
-                // This prevents frames from piling up when display is rate-limited
-                int fps_target = app_state->display_settings().get_target_fps();
-                if (!app_state->frame_sync().should_display_frame(now_us, fps_target)) {
-                    // Not time for next frame yet - skip this event batch entirely
-                    return;
-                }
-
                 // Count events for event rate calculation
                 int64_t event_count = end - begin;
 
@@ -612,20 +596,20 @@ int main(int argc, char* argv[]) {
                 app_state->event_metrics().record_events(event_count, now_us);
                 app_state->event_metrics().record_event_timestamp(last_ts);
 
-                // CRITICAL FIX: Skip ALL old event batches immediately
-                // Check age of newest event - if old, skip entire batch without iterating
+                // CRITICAL: Skip old event batches to prevent latency buildup
+                // Check age of newest event - if old, skip entire batch
                 int64_t cam_start = app_state->camera_state().get_camera_start_time_us();
-
                 Metavision::timestamp newest_event_ts = (end-1)->t;
                 int64_t newest_event_system_ts = cam_start + newest_event_ts;
                 int64_t event_age_us = now_us - newest_event_system_ts;
 
-                // Skip any batch where even the newest event is older than 50ms
-                if (event_age_us > 50000) {  // 50ms - be aggressive about skipping old data
-                    return;  // Skip entire batch immediately
+                // Skip batches with events older than 100ms to stay current
+                if (event_age_us > 100000) {  // 100ms threshold
+                    // Skip old data - don't process into frame generator
+                    return;
                 }
 
-                // Only process recent batches
+                // Process recent event batches
                 std::lock_guard<std::mutex> lock(framegen_mutex);
                 if (app_state && app_state->camera_state().frame_generator()) {
                     app_state->camera_state().frame_generator()->process_events(begin, end);
