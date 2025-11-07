@@ -10,6 +10,12 @@
 #include <cmath>
 #include <algorithm>
 #include <filesystem>
+#include <metavision/hal/facilities/i_erc_module.h>
+#include <metavision/hal/facilities/i_antiflicker_module.h>
+#include <metavision/hal/facilities/i_event_trail_filter_module.h>
+#include <metavision/hal/facilities/i_roi.h>
+#include <metavision/hal/facilities/i_digital_crop.h>
+#include <metavision/hal/facilities/i_monitoring.h>
 
 namespace ui {
 
@@ -447,8 +453,312 @@ void SettingsPanel::capture_frame() {
 }
 
 void SettingsPanel::render_digital_features() {
-    ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Digital features shown here when camera connected");
-    // This will be implemented by moving digital filter code from main.cpp
+    if (!state_.camera_state().is_connected() || !state_.camera_state().camera_manager()) {
+        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Connect camera to access digital features");
+        return;
+    }
+
+    auto& cam_info = state_.camera_state().camera_manager()->get_camera(0);
+
+    // ERC (Event Rate Controller)
+    Metavision::I_ErcModule* erc = cam_info.camera->get_device().get_facility<Metavision::I_ErcModule>();
+    if (erc) {
+        if (ImGui::TreeNode("Event Rate Controller (ERC)")) {
+            static bool erc_enabled = false;
+            static int erc_rate_kev = 1000;
+            static bool erc_initialized = false;
+
+            if (!erc_initialized) {
+                try {
+                    uint32_t current_rate = erc->get_cd_event_rate();
+                    erc_rate_kev = current_rate / 1000;
+                    std::cout << "ERC: Synced with hardware - current rate: " << current_rate << " ev/s" << std::endl;
+                    erc_initialized = true;
+                } catch (const std::exception& e) {
+                    std::cerr << "ERC: Could not read initial state: " << e.what() << std::endl;
+                    erc_initialized = true;
+                }
+            }
+
+            ImGui::TextWrapped("Limit the maximum event rate to prevent bandwidth saturation");
+            ImGui::Spacing();
+
+            if (ImGui::Checkbox("Enable ERC", &erc_enabled)) {
+                try {
+                    erc->enable(erc_enabled);
+                    std::cout << "ERC " << (erc_enabled ? "enabled" : "disabled") << std::endl;
+                } catch (const std::exception& e) {
+                    std::cerr << "ERROR enabling ERC: " << e.what() << std::endl;
+                    erc_enabled = !erc_enabled;
+                }
+            }
+
+            ImGui::Spacing();
+            uint32_t min_rate = erc->get_min_supported_cd_event_rate() / 1000;
+            uint32_t max_rate = erc->get_max_supported_cd_event_rate() / 1000;
+
+            if (ImGui::SliderInt("Event Rate (kev/s)", &erc_rate_kev, min_rate, max_rate)) {
+                try {
+                    uint32_t rate_ev_s = erc_rate_kev * 1000;
+                    erc->set_cd_event_rate(rate_ev_s);
+                    std::cout << "ERC rate set to " << rate_ev_s << " ev/s" << std::endl;
+                } catch (const std::exception& e) {
+                    std::cerr << "ERROR setting ERC rate: " << e.what() << std::endl;
+                }
+            }
+
+            ImGui::TextWrapped("Current: %d kev/s (%d Mev/s)", erc_rate_kev, erc_rate_kev / 1000);
+            ImGui::TextWrapped("Range: %d - %d kev/s", min_rate, max_rate);
+
+            uint32_t period = erc->get_count_period();
+            ImGui::Text("Count Period: %d μs", period);
+            ImGui::TreePop();
+        }
+    }
+
+    // Anti-Flicker Module
+    Metavision::I_AntiFlickerModule* antiflicker = cam_info.camera->get_device().get_facility<Metavision::I_AntiFlickerModule>();
+    if (antiflicker) {
+        if (ImGui::TreeNode("Anti-Flicker Filter")) {
+            static bool af_enabled = false;
+            static int af_mode = 0;
+            static int af_low_freq = 100;
+            static int af_high_freq = 150;
+            static int af_duty_cycle = 50;
+
+            ImGui::TextWrapped("Filter out flicker from artificial lighting (50/60Hz)");
+            ImGui::Spacing();
+
+            if (ImGui::Checkbox("Enable Anti-Flicker", &af_enabled)) {
+                try {
+                    antiflicker->enable(af_enabled);
+                    std::cout << "Anti-Flicker " << (af_enabled ? "enabled" : "disabled") << std::endl;
+                } catch (const std::exception& e) {
+                    std::cerr << "ERROR enabling Anti-Flicker: " << e.what() << std::endl;
+                    af_enabled = !af_enabled;
+                }
+            }
+
+            ImGui::Spacing();
+
+            const char* af_modes[] = { "BAND_STOP (Remove frequencies)", "BAND_PASS (Keep frequencies)" };
+            if (ImGui::Combo("Filter Mode", &af_mode, af_modes, 2)) {
+                antiflicker->set_filtering_mode(af_mode == 0 ?
+                    Metavision::I_AntiFlickerModule::BAND_STOP :
+                    Metavision::I_AntiFlickerModule::BAND_PASS);
+                std::cout << "Anti-Flicker mode set to " << af_modes[af_mode] << std::endl;
+            }
+
+            ImGui::Spacing();
+            ImGui::Text("Frequency Band:");
+
+            uint32_t min_freq = antiflicker->get_min_supported_frequency();
+            uint32_t max_freq = antiflicker->get_max_supported_frequency();
+
+            bool freq_changed = false;
+            freq_changed |= ImGui::SliderInt("Low Frequency (Hz)", &af_low_freq, min_freq, max_freq);
+            freq_changed |= ImGui::SliderInt("High Frequency (Hz)", &af_high_freq, min_freq, max_freq);
+
+            if (freq_changed) {
+                if (af_low_freq >= af_high_freq) {
+                    af_high_freq = af_low_freq + 1;
+                }
+                try {
+                    antiflicker->set_frequency_band(af_low_freq, af_high_freq);
+                    std::cout << "Anti-Flicker frequency band set to [" << af_low_freq
+                             << ", " << af_high_freq << "] Hz" << std::endl;
+                } catch (const std::exception& e) {
+                    std::cerr << "Error setting frequency band: " << e.what() << std::endl;
+                }
+            }
+
+            ImGui::Spacing();
+
+            if (ImGui::SliderInt("Duty Cycle (%)", &af_duty_cycle, 0, 100)) {
+                try {
+                    antiflicker->set_duty_cycle(af_duty_cycle);
+                    std::cout << "Anti-Flicker duty cycle set to " << af_duty_cycle << "%" << std::endl;
+                } catch (const std::exception& e) {
+                    std::cerr << "Error setting duty cycle: " << e.what() << std::endl;
+                }
+            }
+
+            ImGui::Spacing();
+            ImGui::TextWrapped("Common presets:");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("50Hz")) {
+                af_low_freq = std::max((int)min_freq, 45);
+                af_high_freq = std::min((int)max_freq, 55);
+                try {
+                    antiflicker->set_frequency_band(af_low_freq, af_high_freq);
+                    std::cout << "Preset: 50Hz filter set [" << af_low_freq << ", " << af_high_freq << "]" << std::endl;
+                } catch (const std::exception& e) {
+                    std::cerr << "Error setting 50Hz preset: " << e.what() << std::endl;
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("60Hz")) {
+                af_low_freq = std::max((int)min_freq, 55);
+                af_high_freq = std::min((int)max_freq, 65);
+                try {
+                    antiflicker->set_frequency_band(af_low_freq, af_high_freq);
+                    std::cout << "Preset: 60Hz filter set [" << af_low_freq << ", " << af_high_freq << "]" << std::endl;
+                } catch (const std::exception& e) {
+                    std::cerr << "Error setting 60Hz preset: " << e.what() << std::endl;
+                }
+            }
+
+            ImGui::TextWrapped("Range: %d - %d Hz", min_freq, max_freq);
+            ImGui::TreePop();
+        }
+    }
+
+    // Event Trail Filter Module
+    Metavision::I_EventTrailFilterModule* trail_filter = cam_info.camera->get_device().get_facility<Metavision::I_EventTrailFilterModule>();
+    if (trail_filter) {
+        if (ImGui::TreeNode("Event Trail Filter")) {
+            static bool etf_enabled = false;
+            static int etf_type = 0;
+            static int etf_threshold = 10000;
+
+            ImGui::TextWrapped("Filter noise from event bursts and rapid flickering");
+            ImGui::Spacing();
+
+            if (ImGui::Checkbox("Enable Trail Filter", &etf_enabled)) {
+                try {
+                    trail_filter->enable(etf_enabled);
+                    std::cout << "Event Trail Filter " << (etf_enabled ? "enabled" : "disabled") << std::endl;
+                } catch (const std::exception& e) {
+                    std::cerr << "Error enabling trail filter: " << e.what() << std::endl;
+                }
+            }
+
+            ImGui::Spacing();
+
+            const char* etf_types[] = {
+                "TRAIL (Keep first event)",
+                "STC_CUT_TRAIL (Keep second event)",
+                "STC_KEEP_TRAIL (Keep trailing events)"
+            };
+            if (ImGui::Combo("Filter Type", &etf_type, etf_types, 3)) {
+                try {
+                    Metavision::I_EventTrailFilterModule::Type type;
+                    switch (etf_type) {
+                        case 0: type = Metavision::I_EventTrailFilterModule::Type::TRAIL; break;
+                        case 1: type = Metavision::I_EventTrailFilterModule::Type::STC_CUT_TRAIL; break;
+                        case 2: type = Metavision::I_EventTrailFilterModule::Type::STC_KEEP_TRAIL; break;
+                        default: type = Metavision::I_EventTrailFilterModule::Type::TRAIL; break;
+                    }
+                    trail_filter->set_type(type);
+                    std::cout << "Trail filter type set to " << etf_types[etf_type] << std::endl;
+                } catch (const std::exception& e) {
+                    std::cerr << "Error setting trail filter type: " << e.what() << std::endl;
+                }
+            }
+
+            ImGui::Spacing();
+
+            ImGui::Text("Threshold Delay:");
+            try {
+                uint32_t min_thresh = trail_filter->get_min_supported_threshold();
+                uint32_t max_thresh = trail_filter->get_max_supported_threshold();
+
+                if (ImGui::SliderInt("Threshold (μs)", &etf_threshold, min_thresh, max_thresh)) {
+                    try {
+                        trail_filter->set_threshold(etf_threshold);
+                        std::cout << "Trail filter threshold set to " << etf_threshold << " μs" << std::endl;
+                    } catch (const std::exception& e) {
+                        std::cerr << "Error setting threshold: " << e.what() << std::endl;
+                    }
+                }
+
+                ImGui::TextWrapped("Range: %d - %d μs", min_thresh, max_thresh);
+                ImGui::Spacing();
+                ImGui::TextWrapped("Lower threshold = more aggressive filtering");
+            } catch (const std::exception& e) {
+                std::cerr << "Error getting threshold range: " << e.what() << std::endl;
+                ImGui::TextWrapped("Error: Could not get threshold range");
+            }
+            ImGui::TreePop();
+        }
+    }
+
+    // Digital Crop Module
+    Metavision::I_DigitalCrop* digital_crop = cam_info.camera->get_device().get_facility<Metavision::I_DigitalCrop>();
+    if (digital_crop) {
+        if (ImGui::TreeNode("Digital Crop")) {
+            static bool dc_enabled = false;
+            static int dc_x = 0, dc_y = 0;
+            static int dc_width = state_.display_settings().get_image_width();
+            static int dc_height = state_.display_settings().get_image_height();
+
+            ImGui::TextWrapped("Crop sensor output to reduce resolution and data volume");
+            ImGui::Spacing();
+
+            if (ImGui::Checkbox("Enable Digital Crop", &dc_enabled)) {
+                try {
+                    digital_crop->enable(dc_enabled);
+                    std::cout << "Digital Crop " << (dc_enabled ? "enabled" : "disabled") << std::endl;
+
+                    if (dc_enabled) {
+                        int max_w = state_.display_settings().get_image_width() - dc_x;
+                        int max_h = state_.display_settings().get_image_height() - dc_y;
+                        dc_width = std::min(dc_width, max_w);
+                        dc_height = std::min(dc_height, max_h);
+
+                        uint32_t start_x = dc_x;
+                        uint32_t start_y = dc_y;
+                        uint32_t end_x = dc_x + dc_width - 1;
+                        uint32_t end_y = dc_y + dc_height - 1;
+
+                        Metavision::I_DigitalCrop::Region region(start_x, start_y, end_x, end_y);
+                        digital_crop->set_window_region(region, false);
+                        std::cout << "Digital crop region set to [" << start_x << ", " << start_y
+                                 << ", " << end_x << ", " << end_y << "]" << std::endl;
+                    }
+                } catch (const std::exception& e) {
+                    std::cerr << "Error enabling digital crop: " << e.what() << std::endl;
+                    std::cerr << "Note: Some digital features require camera restart to take effect" << std::endl;
+                    dc_enabled = !dc_enabled;
+                }
+            }
+
+            ImGui::Spacing();
+
+            ImGui::Text("Crop Region:");
+            bool dc_changed = false;
+            dc_changed |= ImGui::SliderInt("X Position", &dc_x, 0, state_.display_settings().get_image_width() - 1);
+            dc_changed |= ImGui::SliderInt("Y Position", &dc_y, 0, state_.display_settings().get_image_height() - 1);
+            dc_changed |= ImGui::SliderInt("Width", &dc_width, 1, state_.display_settings().get_image_width());
+            dc_changed |= ImGui::SliderInt("Height", &dc_height, 1, state_.display_settings().get_image_height());
+
+            if (dc_changed && dc_enabled) {
+                try {
+                    int max_w = state_.display_settings().get_image_width() - dc_x;
+                    int max_h = state_.display_settings().get_image_height() - dc_y;
+                    dc_width = std::min(dc_width, max_w);
+                    dc_height = std::min(dc_height, max_h);
+
+                    uint32_t start_x = dc_x;
+                    uint32_t start_y = dc_y;
+                    uint32_t end_x = dc_x + dc_width - 1;
+                    uint32_t end_y = dc_y + dc_height - 1;
+
+                    Metavision::I_DigitalCrop::Region region(start_x, start_y, end_x, end_y);
+                    digital_crop->set_window_region(region, false);
+                    std::cout << "Digital crop region set to [" << start_x << ", " << start_y
+                             << ", " << end_x << ", " << end_y << "]" << std::endl;
+                } catch (const std::exception& e) {
+                    std::cerr << "Error setting crop region: " << e.what() << std::endl;
+                }
+            }
+
+            ImGui::Spacing();
+            ImGui::TextWrapped("Note: Digital crop reduces sensor resolution");
+            ImGui::TextWrapped("Similar to ROI but less flexible");
+            ImGui::TreePop();
+        }
+    }
 }
 
 void SettingsPanel::render_genetic_algorithm() {
