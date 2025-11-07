@@ -421,15 +421,23 @@ bool try_connect_camera(AppConfig& config, EventCamera::BiasManager& bias_mgr,
                                      const Metavision::EventCD* end) {
             if (begin == end || !app_state) return;
 
+            // Get current time
+            auto now = std::chrono::steady_clock::now();
+            auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
+
+            // CRITICAL: Skip processing if we're not ready for a new frame yet
+            // This prevents frames from piling up when display is rate-limited
+            int fps_target = app_state->display_settings().get_target_fps();
+            if (!app_state->frame_sync().should_display_frame(now_us, fps_target)) {
+                // Not time for next frame yet - skip this event batch entirely
+                return;
+            }
+
             // Count events for event rate calculation
             int64_t event_count = end - begin;
 
             // Track last event timestamp to measure event latency
             Metavision::timestamp last_ts = (end-1)->t;
-
-            // Get current time
-            auto now = std::chrono::steady_clock::now();
-            auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
 
             // Record events for metrics
             app_state->event_metrics().record_events(event_count, now_us);
@@ -582,15 +590,23 @@ int main(int argc, char* argv[]) {
                                          const Metavision::EventCD* end) {
                 if (begin == end || !app_state) return;
 
+                // Get current time
+                auto now = std::chrono::steady_clock::now();
+                auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
+
+                // CRITICAL: Skip processing if we're not ready for a new frame yet
+                // This prevents frames from piling up when display is rate-limited
+                int fps_target = app_state->display_settings().get_target_fps();
+                if (!app_state->frame_sync().should_display_frame(now_us, fps_target)) {
+                    // Not time for next frame yet - skip this event batch entirely
+                    return;
+                }
+
                 // Count events for event rate calculation
                 int64_t event_count = end - begin;
 
                 // Track last event timestamp to measure event latency
                 Metavision::timestamp last_ts = (end-1)->t;
-
-                // Get current time
-                auto now = std::chrono::steady_clock::now();
-                auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
 
                 // Record events for metrics
                 app_state->event_metrics().record_events(event_count, now_us);
