@@ -51,6 +51,7 @@ public:
     void capture_frame();
 
 private:
+    void apply_digital_features_to_all_cameras();
 
     core::AppState& state_;
     AppConfig& config_;

@@ -1,6 +1,9 @@
 #include "ui/settings_panel.h"
 #include "core/app_state.h"
 #include "camera_manager.h"
+#include "camera/features/trail_filter_feature.h"
+#include "camera/features/erc_feature.h"
+#include "camera/features/antiflicker_feature.h"
 #include <imgui.h>
 #include <iostream>
 #include <chrono>
@@ -401,8 +404,9 @@ void SettingsPanel::render_apply_button() {
                     }
                 }
 
-                // Also apply digital features to all cameras
-                state_.feature_manager().apply_all_settings();
+                // Apply digital features to all cameras directly
+                std::cout << "Applying digital features to all cameras..." << std::endl;
+                apply_digital_features_to_all_cameras();
             }
 
             // Update frame generation note
@@ -823,6 +827,65 @@ void SettingsPanel::render_digital_features() {
 void SettingsPanel::render_genetic_algorithm() {
     ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "GA controls shown here when camera connected");
     // This will be implemented by moving GA UI code from main.cpp
+}
+
+void SettingsPanel::apply_digital_features_to_all_cameras() {
+    if (!state_.camera_state().is_connected() || !state_.camera_state().camera_manager()) {
+        return;
+    }
+
+    // Simply iterate through all features and apply them to Camera 0 (which feature manager is connected to)
+    // Then manually sync the settings to other cameras
+    std::cout << "Applying digital features to all cameras..." << std::endl;
+    state_.feature_manager().apply_all_settings();
+
+    // Now we need to manually copy the same settings to other cameras
+    // Get Camera 0's feature states
+    auto& cam0 = state_.camera_state().camera_manager()->get_camera(0);
+    int num_cameras = state_.camera_state().num_cameras();
+
+    for (int i = 1; i < num_cameras; ++i) {
+        auto& cam = state_.camera_state().camera_manager()->get_camera(i);
+        std::cout << "Syncing features from Camera 0 to Camera " << i << "..." << std::endl;
+
+        // Sync Trail Filter
+        auto* trail_filter_src = cam0.camera->get_device().get_facility<Metavision::I_EventTrailFilterModule>();
+        auto* trail_filter_dst = cam.camera->get_device().get_facility<Metavision::I_EventTrailFilterModule>();
+        if (trail_filter_src && trail_filter_dst) {
+            try {
+                trail_filter_dst->set_type(trail_filter_src->get_type());
+                trail_filter_dst->set_threshold(trail_filter_src->get_threshold());
+                trail_filter_dst->enable(trail_filter_src->is_enabled());
+                std::cout << "  Trail Filter synced to Camera " << i << std::endl;
+            } catch (const std::exception& e) {
+                std::cerr << "  Failed to sync Trail Filter to Camera " << i << ": " << e.what() << std::endl;
+            }
+        }
+
+        // Sync ERC
+        auto* erc_src = cam0.camera->get_device().get_facility<Metavision::I_ErcModule>();
+        auto* erc_dst = cam.camera->get_device().get_facility<Metavision::I_ErcModule>();
+        if (erc_src && erc_dst) {
+            try {
+                erc_dst->enable(erc_src->is_enabled());
+                std::cout << "  ERC synced to Camera " << i << std::endl;
+            } catch (const std::exception& e) {
+                std::cerr << "  Failed to sync ERC to Camera " << i << ": " << e.what() << std::endl;
+            }
+        }
+
+        // Sync Anti-Flicker
+        auto* antiflicker_src = cam0.camera->get_device().get_facility<Metavision::I_AntiFlickerModule>();
+        auto* antiflicker_dst = cam.camera->get_device().get_facility<Metavision::I_AntiFlickerModule>();
+        if (antiflicker_src && antiflicker_dst) {
+            try {
+                antiflicker_dst->enable(antiflicker_src->is_enabled());
+                std::cout << "  Anti-Flicker synced to Camera " << i << std::endl;
+            } catch (const std::exception& e) {
+                std::cerr << "  Failed to sync Anti-Flicker to Camera " << i << ": " << e.what() << std::endl;
+            }
+        }
+    }
 }
 
 } // namespace ui

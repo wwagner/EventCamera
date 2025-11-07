@@ -360,7 +360,7 @@ bool try_connect_camera(AppConfig& config, EventCamera::BiasManager& bias_mgr,
         std::cerr << "Warning: Failed to initialize BiasManager with new camera" << std::endl;
     }
 
-    // Register and initialize hardware features for ALL cameras
+    // Register and initialize hardware features (using Camera 0 for UI)
     std::cout << "\nRegistering hardware features..." << std::endl;
     app_state->feature_manager().register_feature(std::make_shared<EventCamera::ERCFeature>());
     app_state->feature_manager().register_feature(std::make_shared<EventCamera::AntiFlickerFeature>());
@@ -368,37 +368,35 @@ bool try_connect_camera(AppConfig& config, EventCamera::BiasManager& bias_mgr,
     app_state->feature_manager().register_feature(std::make_shared<EventCamera::ROIFeature>(app_state->roi_filter(), app_state->display_settings()));
     app_state->feature_manager().register_feature(std::make_shared<EventCamera::MonitoringFeature>());
 
-    // Initialize features on ALL cameras
+    // Initialize features on Camera 0 only (for UI display)
+    app_state->feature_manager().initialize_all(*cam_info.camera);
+    std::cout << "Hardware features initialized (using Camera 0 for UI)\n" << std::endl;
+
+    // Apply Trail Filter settings from config to ALL cameras directly
+    Metavision::I_EventTrailFilterModule::Type trail_type;
+    switch (config.camera_settings().trail_filter_type) {
+        case 0: trail_type = Metavision::I_EventTrailFilterModule::Type::TRAIL; break;
+        case 1: trail_type = Metavision::I_EventTrailFilterModule::Type::STC_CUT_TRAIL; break;
+        case 2: trail_type = Metavision::I_EventTrailFilterModule::Type::STC_KEEP_TRAIL; break;
+        default: trail_type = Metavision::I_EventTrailFilterModule::Type::STC_KEEP_TRAIL; break;
+    }
+
     for (int i = 0; i < num_cameras; ++i) {
         auto& cam = app_state->camera_state().camera_manager()->get_camera(i);
-        std::cout << "Initializing features for Camera " << i << "..." << std::endl;
-        app_state->feature_manager().initialize_all(*cam.camera);
-    }
-    std::cout << "Hardware features initialized on all cameras\n" << std::endl;
+        auto* trail_filter = cam.camera->get_device().get_facility<Metavision::I_EventTrailFilterModule>();
 
-    // Apply Trail Filter settings from config to ALL cameras
-    auto trail_filter = std::dynamic_pointer_cast<EventCamera::TrailFilterFeature>(
-        app_state->feature_manager().get_feature("Trail Filter"));
-    if (trail_filter && trail_filter->is_available()) {
-        // Set filter type
-        Metavision::I_EventTrailFilterModule::Type type;
-        switch (config.camera_settings().trail_filter_type) {
-            case 0: type = Metavision::I_EventTrailFilterModule::Type::TRAIL; break;
-            case 1: type = Metavision::I_EventTrailFilterModule::Type::STC_CUT_TRAIL; break;
-            case 2: type = Metavision::I_EventTrailFilterModule::Type::STC_KEEP_TRAIL; break;
-            default: type = Metavision::I_EventTrailFilterModule::Type::STC_KEEP_TRAIL; break;
-        }
-
-        // Apply to all cameras
-        for (int i = 0; i < num_cameras; ++i) {
-            auto& cam = app_state->camera_state().camera_manager()->get_camera(i);
-            trail_filter->set_type(type);
-            trail_filter->set_threshold(config.camera_settings().trail_filter_threshold);
-            trail_filter->enable(config.camera_settings().trail_filter_enabled);
-            std::cout << "Trail Filter configured for Camera " << i << " from config: "
-                      << (config.camera_settings().trail_filter_enabled ? "enabled" : "disabled")
-                      << ", type=" << config.camera_settings().trail_filter_type
-                      << ", threshold=" << config.camera_settings().trail_filter_threshold << "μs" << std::endl;
+        if (trail_filter) {
+            try {
+                trail_filter->set_type(trail_type);
+                trail_filter->set_threshold(config.camera_settings().trail_filter_threshold);
+                trail_filter->enable(config.camera_settings().trail_filter_enabled);
+                std::cout << "Trail Filter configured for Camera " << i << " from config: "
+                          << (config.camera_settings().trail_filter_enabled ? "enabled" : "disabled")
+                          << ", type=" << config.camera_settings().trail_filter_type
+                          << ", threshold=" << config.camera_settings().trail_filter_threshold << "μs" << std::endl;
+            } catch (const std::exception& e) {
+                std::cerr << "Failed to configure Trail Filter for Camera " << i << ": " << e.what() << std::endl;
+            }
         }
     }
 
