@@ -187,8 +187,18 @@ EventCameraGeneticOptimizer::FitnessResult evaluate_genome_fitness(
             int height = app_state->display_settings().get_image_height();
             app_state->camera_state().frame_generator() = std::make_unique<Metavision::PeriodicFrameGenerationAlgorithm>(
                 width, height, accumulation_time_us);
-            app_state->camera_state().frame_generator()->set_output_callback([](const Metavision::timestamp, cv::Mat& frame) {
-                if (!frame.empty()) {
+            app_state->camera_state().frame_generator()->set_output_callback([](const Metavision::timestamp ts, cv::Mat& frame) {
+                if (frame.empty() || !app_state) return;
+
+                // Rate limit display updates to target FPS
+                auto now = std::chrono::steady_clock::now();
+                auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
+                int fps_target = app_state->display_settings().get_target_fps();
+
+                // Check if enough time has passed since last display
+                if (app_state->frame_sync().should_display_frame(now_us, fps_target)) {
+                    app_state->frame_sync().on_frame_generated(ts, now_us);
+                    app_state->frame_sync().on_frame_displayed(now_us);
                     update_texture(frame);
                 }
             });
@@ -585,9 +595,19 @@ int main(int argc, char* argv[]) {
         std::cout << "Frame accumulation time: " << config.camera_settings().accumulation_time_s
                   << "s (" << accumulation_time_us << " us)" << std::endl;
 
-        // Set up frame callback
-        app_state->camera_state().frame_generator()->set_output_callback([](const Metavision::timestamp, cv::Mat& frame) {
-            if (!frame.empty()) {
+        // Set up frame callback with FPS limiting
+        app_state->camera_state().frame_generator()->set_output_callback([](const Metavision::timestamp ts, cv::Mat& frame) {
+            if (frame.empty() || !app_state) return;
+
+            // Rate limit display updates to target FPS
+            auto now = std::chrono::steady_clock::now();
+            auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
+            int fps_target = app_state->display_settings().get_target_fps();
+
+            // Check if enough time has passed since last display
+            if (app_state->frame_sync().should_display_frame(now_us, fps_target)) {
+                app_state->frame_sync().on_frame_generated(ts, now_us);
+                app_state->frame_sync().on_frame_displayed(now_us);
                 update_texture(frame);
             }
         });
