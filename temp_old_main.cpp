@@ -45,10 +45,6 @@
 // Application state module
 #include "core/app_state.h"
 
-// UI modules
-#include "ui/settings_panel.h"
-#include "camera/bias_manager.h"
-
 // Global application state (replaces all previous global state variables)
 std::unique_ptr<core::AppState> app_state;
 
@@ -187,18 +183,8 @@ EventCameraGeneticOptimizer::FitnessResult evaluate_genome_fitness(
             int height = app_state->display_settings().get_image_height();
             app_state->camera_state().frame_generator() = std::make_unique<Metavision::PeriodicFrameGenerationAlgorithm>(
                 width, height, accumulation_time_us);
-            app_state->camera_state().frame_generator()->set_output_callback([](const Metavision::timestamp ts, cv::Mat& frame) {
-                if (frame.empty() || !app_state) return;
-
-                // Rate limit display updates to target FPS
-                auto now = std::chrono::steady_clock::now();
-                auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
-                int fps_target = app_state->display_settings().get_target_fps();
-
-                // Check if enough time has passed since last display
-                if (app_state->frame_sync().should_display_frame(now_us, fps_target)) {
-                    app_state->frame_sync().on_frame_generated(ts, now_us);
-                    app_state->frame_sync().on_frame_displayed(now_us);
+            app_state->camera_state().frame_generator()->set_output_callback([](const Metavision::timestamp, cv::Mat& frame) {
+                if (!frame.empty()) {
                     update_texture(frame);
                 }
             });
@@ -298,7 +284,7 @@ EventCameraGeneticOptimizer::FitnessResult evaluate_genome_fitness(
 /**
  * Attempt to connect to a camera (for hot-plug support)
  */
-bool try_connect_camera(AppConfig& config, EventCamera::BiasManager& bias_mgr,
+bool try_connect_camera(AppConfig& config, std::map<std::string, BiasRange>& bias_ranges,
                         const std::string& serial_hint = "") {
     if (!app_state) return false;
 
@@ -341,12 +327,23 @@ bool try_connect_camera(AppConfig& config, EventCamera::BiasManager& bias_mgr,
 
     auto& cam_info = app_state->camera_state().camera_manager()->get_camera(0);
     app_state->display_settings().set_image_size(cam_info.width, cam_info.height);
-
-    // Initialize BiasManager with newly connected camera
-    if (bias_mgr.initialize(*cam_info.camera)) {
-        std::cout << "BiasManager initialized with new camera" << std::endl;
-    } else {
-        std::cerr << "Warning: Failed to initialize BiasManager with new camera" << std::endl;
+    
+    // Query bias ranges from newly connected camera
+    bias_ranges.clear();
+    auto* i_ll_biases = cam_info.camera->get_device().get_facility<Metavision::I_LL_Biases>();
+    if (i_ll_biases) {
+        for (const auto& name : {"bias_diff", "bias_refr", "bias_fo", "bias_hpf"}) {
+            try {
+                Metavision::LL_Bias_Info info;
+                if (i_ll_biases->get_bias_info(name, info)) {
+                    auto range = info.get_bias_range();
+                    int current = i_ll_biases->get(name);
+                    bias_ranges[name] = {range.first, range.second, current};
+                }
+            } catch (...) {
+                // Bias not available on this camera
+            }
+        }
     }
     
     // Create frame generator
@@ -495,8 +492,8 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // Initialize BiasManager for camera bias control
-    EventCamera::BiasManager bias_manager;
+    // Query bias ranges from camera and initialize settings
+    std::map<std::string, BiasRange> bias_ranges;
 
     // Check which monitoring features are supported
     struct MonitoringCapabilities {
@@ -505,37 +502,44 @@ int main(int argc, char* argv[]) {
         bool has_dead_time = false;
     } monitoring_caps;
 
-    // Initialize BiasManager with camera settings
+    // Only query camera settings if we have a real camera
     if (app_state->camera_state().is_connected()) {
-        std::cout << "\nInitializing BiasManager with camera..." << std::endl;
+        std::cout << "\nDebug: Querying bias settings from camera..." << std::endl;
         auto& cam_info = app_state->camera_state().camera_manager()->get_camera(0);
-        if (bias_manager.initialize(*cam_info.camera)) {
-            std::cout << "BiasManager initialized successfully" << std::endl;
-
-            // Display available bias ranges
-            const auto& bias_ranges = bias_manager.get_bias_ranges();
-            for (const auto& [name, range] : bias_ranges) {
-                std::cout << name << " range: [" << range.min << ", "
-                         << range.max << "], current: " << range.current << std::endl;
+        auto* i_ll_biases = cam_info.camera->get_device().get_facility<Metavision::I_LL_Biases>();
+        if (i_ll_biases) {
+        std::vector<std::string> bias_names = {"bias_diff", "bias_refr", "bias_fo", "bias_hpf"};
+        for (const auto& name : bias_names) {
+            try {
+                Metavision::LL_Bias_Info info;
+                if (i_ll_biases->get_bias_info(name, info)) {
+                    auto range = info.get_bias_range();
+                    int current = i_ll_biases->get(name);
+                    bias_ranges[name] = {range.first, range.second, current};
+                    std::cout << name << " range: [" << range.first << ", "
+                             << range.second << "], current: " << current << std::endl;
+                } else {
+                    std::cout << name << " - not available on this camera" << std::endl;
+                }
+            } catch (const std::exception& e) {
+                std::cout << name << " - error: " << e.what() << std::endl;
             }
-
-            // Apply config settings from INI file to camera
-            std::cout << "\nApplying bias settings from config file..." << std::endl;
-            bias_manager.set_bias("bias_diff", config.camera_settings().bias_diff);
-            bias_manager.set_bias("bias_diff_on", config.camera_settings().bias_diff_on);
-            bias_manager.set_bias("bias_diff_off", config.camera_settings().bias_diff_off);
-            bias_manager.set_bias("bias_refr", config.camera_settings().bias_refr);
-            bias_manager.set_bias("bias_fo", config.camera_settings().bias_fo);
-            bias_manager.set_bias("bias_hpf", config.camera_settings().bias_hpf);
-            bias_manager.apply_to_camera();
-            std::cout << "Bias settings applied from config" << std::endl;
-        } else {
-            std::cerr << "Warning: Failed to initialize BiasManager" << std::endl;
         }
 
-        // Check monitoring capabilities once at startup
-        // Disable monitoring features entirely to avoid error spam
-        auto* monitoring_facility = cam_info.camera->get_device().get_facility<Metavision::I_Monitoring>();
+        // Initialize config settings with current camera values (only if available)
+        if (bias_ranges.count("bias_diff"))
+            config.camera_settings().bias_diff = bias_ranges["bias_diff"].current;
+        if (bias_ranges.count("bias_refr"))
+            config.camera_settings().bias_refr = bias_ranges["bias_refr"].current;
+        if (bias_ranges.count("bias_fo"))
+            config.camera_settings().bias_fo = bias_ranges["bias_fo"].current;
+        if (bias_ranges.count("bias_hpf"))
+            config.camera_settings().bias_hpf = bias_ranges["bias_hpf"].current;
+    }
+
+    // Check monitoring capabilities once at startup
+    // Disable monitoring features entirely to avoid error spam
+    auto* monitoring_facility = cam_info.camera->get_device().get_facility<Metavision::I_Monitoring>();
     if (monitoring_facility) {
         std::cout << "\nChecking monitoring capabilities..." << std::endl;
 
@@ -576,9 +580,12 @@ int main(int argc, char* argv[]) {
 
         std::cout << "Debug: Camera initialization complete!" << std::endl;
     } else {
-        // Simulation mode - setup default bias ranges
-        std::cout << "Simulation mode: setting up default bias ranges" << std::endl;
-        bias_manager.setup_simulation_defaults();
+        // Simulation mode - use default bias ranges
+        bias_ranges["bias_diff"] = {-25, 23, 0};
+        bias_ranges["bias_refr"] = {-25, 23, 0};
+        bias_ranges["bias_fo"] = {-25, 23, 0};
+        bias_ranges["bias_hpf"] = {-25, 23, 0};
+        std::cout << "Simulation mode: using default bias ranges" << std::endl;
     }
 
     // Create frame generation algorithm (used in camera mode only)
@@ -597,19 +604,9 @@ int main(int argc, char* argv[]) {
         std::cout << "Frame accumulation time: " << config.camera_settings().accumulation_time_s
                   << "s (" << accumulation_time_us << " us)" << std::endl;
 
-        // Set up frame callback with FPS limiting
-        app_state->camera_state().frame_generator()->set_output_callback([](const Metavision::timestamp ts, cv::Mat& frame) {
-            if (frame.empty() || !app_state) return;
-
-            // Rate limit display updates to target FPS
-            auto now = std::chrono::steady_clock::now();
-            auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
-            int fps_target = app_state->display_settings().get_target_fps();
-
-            // Check if enough time has passed since last display
-            if (app_state->frame_sync().should_display_frame(now_us, fps_target)) {
-                app_state->frame_sync().on_frame_generated(ts, now_us);
-                app_state->frame_sync().on_frame_displayed(now_us);
+        // Set up frame callback
+        app_state->camera_state().frame_generator()->set_output_callback([](const Metavision::timestamp, cv::Mat& frame) {
+            if (!frame.empty()) {
                 update_texture(frame);
             }
         });
@@ -738,8 +735,9 @@ int main(int argc, char* argv[]) {
         });
     }
 
-    // Create SettingsPanel for UI
-    ui::SettingsPanel settings_panel(*app_state, config, bias_manager);
+    // Track if settings changed
+    bool settings_changed = false;
+    auto previous_settings = config.camera_settings();
 
     // ImageJ streaming state
     auto last_stream_time = std::chrono::steady_clock::now();
@@ -801,77 +799,397 @@ int main(int argc, char* argv[]) {
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        // Render settings panel
-        settings_panel.render();
+        // Settings panel
+        ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(420, window_height - 20), ImGuiCond_FirstUseEver);
 
-        // Handle camera connection requests from SettingsPanel
-        if (settings_panel.camera_reconnect_requested()) {
-            settings_panel.reset_camera_reconnect_request();
+        if (ImGui::Begin("Camera Settings")) {
+            // Capture Frame button at the top
+            if (ImGui::Button("Capture Frame", ImVec2(-1, 0))) {
+                std::cout << "Capture Frame button clicked!" << std::endl;
 
-            std::cout << "\n=== Disconnecting camera ===" << std::endl;
+                // Get currently displayed frame from texture manager
+                cv::Mat frame = app_state->texture_manager().get_last_frame();
+                std::cout << "Frame size: " << frame.cols << "x" << frame.rows
+                          << ", channels: " << frame.channels()
+                          << ", empty: " << (frame.empty() ? "YES" : "NO") << std::endl;
 
-            // Get camera info before disconnecting
+                if (!frame.empty()) {
+                    // Generate timestamped filename
+                    auto now = std::chrono::system_clock::now();
+                    auto time_t = std::chrono::system_clock::to_time_t(now);
+                    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        now.time_since_epoch()) % 1000;
+
+                    std::stringstream ss;
+                    ss << "capture_"
+                       << std::put_time(std::localtime(&time_t), "%Y%m%d_%H%M%S")
+                       << "_" << std::setfill('0') << std::setw(3) << ms.count()
+                       << ".png";
+
+                    std::string filename = ss.str();
+
+                    // Construct full path with configured directory
+                    std::string capture_dir = config.camera_settings().capture_directory;
+                    std::string full_path = capture_dir;
+                    if (!capture_dir.empty() && capture_dir.back() != '\\' && capture_dir.back() != '/') {
+                        full_path += "\\";
+                    }
+                    full_path += filename;
+
+                    std::cout << "Attempting to save to: " << full_path << std::endl;
+
+                    try {
+                        bool success = cv::imwrite(full_path, frame);
+                        if (success) {
+                            std::cout << "Frame captured successfully: " << full_path << std::endl;
+                        } else {
+                            std::cerr << "cv::imwrite returned false - failed to save: " << full_path << std::endl;
+                        }
+                    } catch (const std::exception& e) {
+                        std::cerr << "Exception while capturing frame: " << e.what() << std::endl;
+                    }
+                } else {
+                    std::cout << "No frame available to capture (frame is empty)" << std::endl;
+                }
+            }
+            ImGui::Separator();
+
+            // ImageJ streaming controls
+            ImGui::Text("ImageJ Streaming");
+            bool streaming_enabled = config.camera_settings().imagej_streaming_enabled;
+            if (ImGui::Checkbox("Enable Streaming", &streaming_enabled)) {
+                config.camera_settings().imagej_streaming_enabled = streaming_enabled;
+                if (streaming_enabled) {
+                    std::cout << "ImageJ streaming enabled (" << config.camera_settings().imagej_stream_fps << " FPS)" << std::endl;
+                    std::cout << "Stream directory: " << config.camera_settings().imagej_stream_directory << std::endl;
+                } else {
+                    std::cout << "ImageJ streaming disabled" << std::endl;
+                }
+            }
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "(%d FPS to %s)",
+                config.camera_settings().imagej_stream_fps,
+                config.camera_settings().imagej_stream_directory.c_str());
+            ImGui::Separator();
+
+            // Get camera info if connected
             CameraManager::CameraInfo* cam_info_ptr = nullptr;
             if (app_state->camera_state().is_connected() && app_state->camera_state().camera_manager()) {
                 cam_info_ptr = &app_state->camera_state().camera_manager()->get_camera(0);
+            }
 
-                // Stop camera first
-                try {
-                    cam_info_ptr->camera->stop();
-                    std::cout << "Camera stopped" << std::endl;
-                } catch (const std::exception& e) {
-                    std::cerr << "Error stopping camera: " << e.what() << std::endl;
+            if (app_state->camera_state().is_connected() && cam_info_ptr) {
+                ImGui::Text("Camera: %s", cam_info_ptr->serial.c_str());
+
+                // Add disconnect/reconnect button
+                if (ImGui::Button("Disconnect & Reconnect Camera", ImVec2(-1, 0))) {
+                    std::cout << "\n=== Disconnecting camera ===" << std::endl;
+
+                    // Stop camera first
+                    try {
+                        cam_info_ptr->camera->stop();
+                        std::cout << "Camera stopped" << std::endl;
+                    } catch (const std::exception& e) {
+                        std::cerr << "Error stopping camera: " << e.what() << std::endl;
+                    }
+
+                    // Stop event thread
+                    if (app_state->camera_state().event_thread() && app_state->camera_state().event_thread()->joinable()) {
+                        app_state->request_shutdown();  // Signal thread to stop
+                        std::cout << "Waiting for event thread to stop..." << std::endl;
+                        app_state->camera_state().event_thread()->join();
+                        app_state->camera_state().event_thread().reset();
+                        // Re-create app_state for next connection
+                        app_state = std::make_unique<core::AppState>();
+                        std::cout << "Event thread stopped" << std::endl;
+                    }
+
+                    // Clear camera resources
+                    app_state->camera_state().frame_generator().reset();
+                    app_state->camera_state().camera_manager().reset();
+                    app_state->camera_state().set_connected(false);
+                    cam_info_ptr = nullptr;
+                    // Reset texture manager (will recreate texture on next frame)
+                    app_state->texture_manager().reset();
+
+                    std::cout << "Camera disconnected" << std::endl;
+                    std::cout << "\n=== Reconnecting camera ===" << std::endl;
+
+                    // Reconnect
+                    if (try_connect_camera(config, bias_ranges)) {
+                        std::cout << "Successfully reconnected to camera!" << std::endl;
+
+                        // Update cam_info_ptr with new camera
+                        if (app_state->camera_state().is_connected() && app_state->camera_state().camera_manager()) {
+                            cam_info_ptr = &app_state->camera_state().camera_manager()->get_camera(0);
+                        }
+                    } else {
+                        std::cout << "No cameras found or connection failed" << std::endl;
+                    }
+                }
+            } else {
+                ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "Mode: SIMULATION");
+                if (ImGui::Button("Connect Camera", ImVec2(-1, 0))) {
+                    if (try_connect_camera(config, bias_ranges)) {
+                        std::cout << "Successfully connected to camera!" << std::endl;
+                    } else {
+                        std::cout << "No cameras found or connection failed" << std::endl;
+                    }
+                }
+            }
+            int width = app_state->display_settings().get_image_width();
+            int height = app_state->display_settings().get_image_height();
+            ImGui::Text("Resolution: %dx%d", width, height);
+            ImGui::Text("Display FPS: %.1f", io.Framerate);
+
+            // Event rate display
+            int64_t event_rate = app_state->event_metrics().get_events_per_second();
+            if (event_rate > 1000000) {
+                ImGui::Text("Event rate: %.2f M events/sec", event_rate / 1000000.0f);
+            } else if (event_rate > 1000) {
+                ImGui::Text("Event rate: %.1f K events/sec", event_rate / 1000.0f);
+            } else {
+                ImGui::Text("Event rate: %lld events/sec", event_rate);
+            }
+
+            // Frame generation and latency diagnostics
+            int64_t gen = app_state->frame_buffer().get_frames_generated();
+            int64_t drop = app_state->frame_buffer().get_frames_dropped();
+            if (gen > 0) {
+                float drop_rate = (drop * 100.0f) / gen;
+                ImGui::Text("Frames: %lld generated, %lld dropped (%.1f%%)", gen, drop, drop_rate);
+            }
+
+            // Calculate event latency (how old are events when we receive them)
+            int64_t event_ts = app_state->event_metrics().get_last_event_timestamp();
+            int64_t cam_start = app_state->camera_state().get_camera_start_time_us();
+            if (event_ts > 0 && cam_start > 0) {
+                auto now = std::chrono::steady_clock::now();
+                auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
+                // Event timestamp is microseconds since camera start
+                // Convert to system time by adding to camera start time
+                int64_t event_system_ts = cam_start + event_ts;
+                float event_latency_ms = (now_us - event_system_ts) / 1000.0f;
+                ImGui::Text("Event latency: %.1f ms", event_latency_ms);
+                if (event_latency_ms > 500.0f) {
+                    ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "WARNING: Events are %.1f sec old!", event_latency_ms/1000.0f);
                 }
             }
 
-            // Stop event thread
-            if (app_state->camera_state().event_thread() && app_state->camera_state().event_thread()->joinable()) {
-                app_state->request_shutdown();
-                std::cout << "Waiting for event thread to stop..." << std::endl;
-                app_state->camera_state().event_thread()->join();
-                app_state->camera_state().event_thread().reset();
-                std::cout << "Event thread stopped" << std::endl;
+            // Calculate latency from frame generation to display
+            auto now = std::chrono::steady_clock::now();
+            auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
+            int64_t frame_sys_ts = app_state->frame_sync().get_last_frame_system_ts();
+            if (frame_sys_ts > 0) {
+                float frame_latency_ms = (now_us - frame_sys_ts) / 1000.0f;
+                ImGui::Text("Frame display latency: %.1f ms", frame_latency_ms);
             }
 
-            // Reset the running flag so camera can start again
-            app_state->reset_running_flag();
+            ImGui::Separator();
 
-            // Clear camera resources
-            app_state->camera_state().frame_generator().reset();
-            app_state->camera_state().camera_manager().reset();
-            app_state->camera_state().set_connected(false);
-            app_state->texture_manager().reset();
+            ImGui::Text("Camera Biases");
+            ImGui::Text("Adjust these to tune event detection");
+            ImGui::Spacing();
 
-            std::cout << "Camera disconnected" << std::endl;
-            std::cout << "\n=== Reconnecting camera ===" << std::endl;
+            auto& cam_settings = config.camera_settings();
 
-            // Reconnect
-            if (try_connect_camera(config, bias_manager)) {
-                std::cout << "Successfully reconnected to camera!" << std::endl;
-            } else {
-                std::cout << "No cameras found or connection failed" << std::endl;
+            // Exponential bias sliders for better control at low values
+            // Helper lambda to map slider position (0-100) to bias value exponentially
+            auto exp_to_bias = [](float slider_pos, int min_val, int max_val) -> int {
+                // slider_pos is 0-100, map exponentially to [min_val, max_val]
+                float normalized = slider_pos / 100.0f;  // 0.0 to 1.0
+                float exponential = std::pow(normalized, 2.5f);  // More resolution at low end
+                return static_cast<int>(min_val + exponential * (max_val - min_val));
+            };
+
+            auto bias_to_exp = [](int bias_val, int min_val, int max_val) -> float {
+                // Inverse: bias value to slider position (0-100)
+                float normalized = (bias_val - min_val) / static_cast<float>(max_val - min_val);
+                return std::pow(normalized, 1.0f / 2.5f) * 100.0f;
+            };
+
+            // Static variables to track slider positions (initialized once)
+            static float slider_diff = 50.0f;
+            static float slider_refr = 50.0f;
+            static float slider_fo = 50.0f;
+            static float slider_hpf = 50.0f;
+            static bool sliders_initialized = false;
+
+            // Initialize sliders from current bias values (only once)
+            if (!sliders_initialized && !bias_ranges.empty()) {
+                if (bias_ranges.count("bias_diff"))
+                    slider_diff = bias_to_exp(cam_settings.bias_diff, bias_ranges["bias_diff"].min, bias_ranges["bias_diff"].max);
+                if (bias_ranges.count("bias_refr"))
+                    slider_refr = bias_to_exp(cam_settings.bias_refr, bias_ranges["bias_refr"].min, bias_ranges["bias_refr"].max);
+                if (bias_ranges.count("bias_fo"))
+                    slider_fo = bias_to_exp(cam_settings.bias_fo, bias_ranges["bias_fo"].min, bias_ranges["bias_fo"].max);
+                if (bias_ranges.count("bias_hpf"))
+                    slider_hpf = bias_to_exp(cam_settings.bias_hpf, bias_ranges["bias_hpf"].min, bias_ranges["bias_hpf"].max);
+                sliders_initialized = true;
             }
-        }
 
-        if (settings_panel.camera_connect_requested()) {
-            settings_panel.reset_camera_connect_request();
-
-            if (try_connect_camera(config, bias_manager)) {
-                std::cout << "Successfully connected to camera!" << std::endl;
-            } else {
-                std::cout << "No cameras found or connection failed" << std::endl;
+            // Exponentially-scaled bias sliders
+            if (bias_ranges.count("bias_diff")) {
+                auto& range = bias_ranges["bias_diff"];
+                if (ImGui::SliderFloat("bias_diff", &slider_diff, 0.0f, 100.0f, "%.0f%%")) {
+                    cam_settings.bias_diff = exp_to_bias(slider_diff, range.min, range.max);
+                    settings_changed = true;
+                }
+                // Add input box for direct value entry
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(80);
+                int temp_diff = cam_settings.bias_diff;
+                if (ImGui::InputInt("##bias_diff_input", &temp_diff)) {
+                    temp_diff = std::clamp(temp_diff, range.min, range.max);
+                    cam_settings.bias_diff = temp_diff;
+                    slider_diff = bias_to_exp(temp_diff, range.min, range.max);
+                    settings_changed = true;
+                }
+                ImGui::TextWrapped("Event threshold: %d [%d to %d] (exponential scale)",
+                                   cam_settings.bias_diff, range.min, range.max);
             }
-        }
+            ImGui::Spacing();
 
-        // Advanced Features panel (positioned below basic settings)
-        ImGui::SetNextWindowPos(ImVec2(10, 620), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(400, window_height - 630), ImGuiCond_FirstUseEver);
+            if (bias_ranges.count("bias_refr")) {
+                auto& range = bias_ranges["bias_refr"];
+                if (ImGui::SliderFloat("bias_refr", &slider_refr, 0.0f, 100.0f, "%.0f%%")) {
+                    cam_settings.bias_refr = exp_to_bias(slider_refr, range.min, range.max);
+                    settings_changed = true;
+                }
+                // Add input box for direct value entry
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(80);
+                int temp_refr = cam_settings.bias_refr;
+                if (ImGui::InputInt("##bias_refr_input", &temp_refr)) {
+                    temp_refr = std::clamp(temp_refr, range.min, range.max);
+                    cam_settings.bias_refr = temp_refr;
+                    slider_refr = bias_to_exp(temp_refr, range.min, range.max);
+                    settings_changed = true;
+                }
+                ImGui::TextWrapped("Refractory: %d [%d to %d] (exponential scale)",
+                                   cam_settings.bias_refr, range.min, range.max);
+            }
+            ImGui::Spacing();
 
-        if (ImGui::Begin("Camera Settings - Advanced")) {
-            // Get camera info pointer for Advanced Features section
-            CameraManager::CameraInfo* cam_info_ptr = nullptr;
-            if (app_state->camera_state().is_connected() && app_state->camera_state().camera_manager()) {
-                cam_info_ptr = &app_state->camera_state().camera_manager()->get_camera(0);
+            if (bias_ranges.count("bias_fo")) {
+                auto& range = bias_ranges["bias_fo"];
+                if (ImGui::SliderFloat("bias_fo", &slider_fo, 0.0f, 100.0f, "%.0f%%")) {
+                    cam_settings.bias_fo = exp_to_bias(slider_fo, range.min, range.max);
+                    settings_changed = true;
+                }
+                // Add input box for direct value entry
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(80);
+                int temp_fo = cam_settings.bias_fo;
+                if (ImGui::InputInt("##bias_fo_input", &temp_fo)) {
+                    temp_fo = std::clamp(temp_fo, range.min, range.max);
+                    cam_settings.bias_fo = temp_fo;
+                    slider_fo = bias_to_exp(temp_fo, range.min, range.max);
+                    settings_changed = true;
+                }
+                ImGui::TextWrapped("Follower: %d [%d to %d] (exponential scale)",
+                                   cam_settings.bias_fo, range.min, range.max);
+            }
+            ImGui::Spacing();
+
+            if (bias_ranges.count("bias_hpf")) {
+                auto& range = bias_ranges["bias_hpf"];
+                if (ImGui::SliderFloat("bias_hpf", &slider_hpf, 0.0f, 100.0f, "%.0f%%")) {
+                    cam_settings.bias_hpf = exp_to_bias(slider_hpf, range.min, range.max);
+                    settings_changed = true;
+                }
+                // Add input box for direct value entry
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(80);
+                int temp_hpf = cam_settings.bias_hpf;
+                if (ImGui::InputInt("##bias_hpf_input", &temp_hpf)) {
+                    temp_hpf = std::clamp(temp_hpf, range.min, range.max);
+                    cam_settings.bias_hpf = temp_hpf;
+                    slider_hpf = bias_to_exp(temp_hpf, range.min, range.max);
+                    settings_changed = true;
+                }
+                ImGui::TextWrapped("High-pass: %d [%d to %d] (exponential scale)",
+                                   cam_settings.bias_hpf, range.min, range.max);
+            }
+            ImGui::Spacing();
+
+            ImGui::Separator();
+            ImGui::Text("Display Settings");
+
+            int display_fps = app_state->display_settings().get_target_fps();
+            if (ImGui::SliderInt("Target Display FPS", &display_fps, 1, 60)) {
+                app_state->display_settings().set_target_fps(display_fps);
+            }
+            ImGui::TextWrapped("Limit display updates (lower = less CPU)");
+
+            ImGui::Spacing();
+
+            // Frame subtraction toggle
+            if (app_state->subtraction_filter()) {
+                bool diff_enabled = app_state->subtraction_filter()->is_enabled();
+                if (ImGui::Checkbox("Enable Frame Subtraction", &diff_enabled)) {
+                    app_state->subtraction_filter()->set_enabled(diff_enabled);
+                    std::cout << "Frame subtraction " << (diff_enabled ? "enabled" : "disabled") << std::endl;
+                }
+            }
+            ImGui::TextWrapped("Subtract successive frames to visualize motion/changes (gray = no change, brighter = increase, darker = decrease)");
+
+            ImGui::Separator();
+            ImGui::Text("Frame Generation");
+
+            if (ImGui::SliderFloat("Accumulation (s)", &cam_settings.accumulation_time_s,
+                                  0.001f, 0.1f, "%.3f")) {
+                settings_changed = true;
+            }
+            ImGui::TextWrapped("Time to accumulate events (lower = more responsive)");
+
+            // Apply button
+            ImGui::Spacing();
+            ImGui::Separator();
+            if (settings_changed) {
+                ImGui::TextColored(ImVec4(1, 1, 0, 1), "Settings changed!");
+                if (ImGui::Button("Apply Settings", ImVec2(-1, 0))) {
+                    // Apply bias settings
+                    if (app_state->camera_state().is_connected() && cam_info_ptr) {
+                        apply_bias_settings(*cam_info_ptr->camera, cam_settings);
+                    }
+
+                    // Update frame generation if accumulation time changed
+                    if (cam_settings.accumulation_time_s != previous_settings.accumulation_time_s) {
+                        std::cout << "Updating frame accumulation time to "
+                                  << cam_settings.accumulation_time_s << "s" << std::endl;
+
+                        const uint32_t new_time_us = static_cast<uint32_t>(
+                            cam_settings.accumulation_time_s * 1000000);
+
+                        // Update config first
+                        config.camera_settings().accumulation_time_s = cam_settings.accumulation_time_s;
+
+                        // Note: Frame generator accumulation time cannot be changed at runtime
+                        // It requires restarting the entire camera/algorithm pipeline
+                        std::cout << "Note: Frame accumulation time will take effect after reconnecting camera" << std::endl;
+                        std::cout << "Config updated to " << cam_settings.accumulation_time_s << "s" << std::endl;
+                    }
+
+                    previous_settings = cam_settings;
+                    settings_changed = false;
+                }
+            }
+
+            // Reset button
+            if (ImGui::Button("Reset to Defaults", ImVec2(-1, 0))) {
+                // Reset to middle of each bias range
+                if (bias_ranges.count("bias_diff"))
+                    cam_settings.bias_diff = (bias_ranges["bias_diff"].min + bias_ranges["bias_diff"].max) / 2;
+                if (bias_ranges.count("bias_refr"))
+                    cam_settings.bias_refr = (bias_ranges["bias_refr"].min + bias_ranges["bias_refr"].max) / 2;
+                if (bias_ranges.count("bias_fo"))
+                    cam_settings.bias_fo = (bias_ranges["bias_fo"].min + bias_ranges["bias_fo"].max) / 2;
+                if (bias_ranges.count("bias_hpf"))
+                    cam_settings.bias_hpf = (bias_ranges["bias_hpf"].min + bias_ranges["bias_hpf"].max) / 2;
+                cam_settings.accumulation_time_s = 0.01f;
+                settings_changed = true;
             }
 
             // ===================================================================
@@ -880,13 +1198,6 @@ int main(int argc, char* argv[]) {
             ImGui::Spacing();
             ImGui::Separator();
             ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "Advanced Features");
-
-
-
-
-
-
-
 
             // Hardware Monitoring
             Metavision::I_Monitoring* monitoring = nullptr;
@@ -1023,34 +1334,13 @@ int main(int argc, char* argv[]) {
                 if (ImGui::CollapsingHeader("Event Rate Controller (ERC)")) {
                     static bool erc_enabled = false;
                     static int erc_rate_kev = 1000;  // kilo-events per second
-                    static bool erc_initialized = false;
-
-                    // Sync UI with hardware state on first render
-                    if (!erc_initialized) {
-                        try {
-                            // Note: Metavision SDK doesn't provide a way to read enabled state
-                            // We can only read the rate
-                            uint32_t current_rate = erc->get_cd_event_rate();
-                            erc_rate_kev = current_rate / 1000;
-                            std::cout << "ERC: Synced with hardware - current rate: " << current_rate << " ev/s" << std::endl;
-                            erc_initialized = true;
-                        } catch (const std::exception& e) {
-                            std::cerr << "ERC: Could not read initial state: " << e.what() << std::endl;
-                            erc_initialized = true;  // Don't retry every frame
-                        }
-                    }
 
                     ImGui::TextWrapped("Limit the maximum event rate to prevent bandwidth saturation");
                     ImGui::Spacing();
 
                     if (ImGui::Checkbox("Enable ERC", &erc_enabled)) {
-                        try {
-                            erc->enable(erc_enabled);
-                            std::cout << "ERC " << (erc_enabled ? "enabled" : "disabled") << std::endl;
-                        } catch (const std::exception& e) {
-                            std::cerr << "ERROR enabling ERC: " << e.what() << std::endl;
-                            erc_enabled = !erc_enabled;  // Revert checkbox
-                        }
+                        erc->enable(erc_enabled);
+                        std::cout << "ERC " << (erc_enabled ? "enabled" : "disabled") << std::endl;
                     }
 
                     ImGui::Spacing();
@@ -1058,13 +1348,9 @@ int main(int argc, char* argv[]) {
                     uint32_t max_rate = erc->get_max_supported_cd_event_rate() / 1000;
 
                     if (ImGui::SliderInt("Event Rate (kev/s)", &erc_rate_kev, min_rate, max_rate)) {
-                        try {
-                            uint32_t rate_ev_s = erc_rate_kev * 1000;  // Convert to ev/s
-                            erc->set_cd_event_rate(rate_ev_s);
-                            std::cout << "ERC rate set to " << rate_ev_s << " ev/s" << std::endl;
-                        } catch (const std::exception& e) {
-                            std::cerr << "ERROR setting ERC rate: " << e.what() << std::endl;
-                        }
+                        uint32_t rate_ev_s = erc_rate_kev * 1000;  // Convert to ev/s
+                        erc->set_cd_event_rate(rate_ev_s);
+                        std::cout << "ERC rate set to " << rate_ev_s << " ev/s" << std::endl;
                     }
 
                     ImGui::TextWrapped("Current: %d kev/s (%d Mev/s)", erc_rate_kev, erc_rate_kev / 1000);
@@ -1092,13 +1378,8 @@ int main(int argc, char* argv[]) {
                     ImGui::Spacing();
 
                     if (ImGui::Checkbox("Enable Anti-Flicker", &af_enabled)) {
-                        try {
-                            antiflicker->enable(af_enabled);
-                            std::cout << "Anti-Flicker " << (af_enabled ? "enabled" : "disabled") << std::endl;
-                        } catch (const std::exception& e) {
-                            std::cerr << "ERROR enabling Anti-Flicker: " << e.what() << std::endl;
-                            af_enabled = !af_enabled;  // Revert checkbox
-                        }
+                        antiflicker->enable(af_enabled);
+                        std::cout << "Anti-Flicker " << (af_enabled ? "enabled" : "disabled") << std::endl;
                     }
 
                     ImGui::Spacing();
@@ -1415,25 +1696,24 @@ int main(int argc, char* argv[]) {
                         params.minimum_event_pixels = 500;  // 23 dots × ~25-50 pixels each
                         params.delta = 5.0f;  // Heavy penalty for insufficient events
 
-                        // Get bias ranges from BiasManager
+                        // Get bias ranges from camera hardware
                         EventCameraGeneticOptimizer::Genome::BiasRanges hw_ranges;
-                        const auto& bias_ranges = bias_manager.get_bias_ranges();
                         if (!bias_ranges.empty()) {
                             if (bias_ranges.count("bias_diff")) {
-                                hw_ranges.diff_min = bias_ranges.at("bias_diff").min;
-                                hw_ranges.diff_max = bias_ranges.at("bias_diff").max;
+                                hw_ranges.diff_min = bias_ranges["bias_diff"].min;
+                                hw_ranges.diff_max = bias_ranges["bias_diff"].max;
                             }
                             if (bias_ranges.count("bias_refr")) {
-                                hw_ranges.refr_min = bias_ranges.at("bias_refr").min;
-                                hw_ranges.refr_max = bias_ranges.at("bias_refr").max;
+                                hw_ranges.refr_min = bias_ranges["bias_refr"].min;
+                                hw_ranges.refr_max = bias_ranges["bias_refr"].max;
                             }
                             if (bias_ranges.count("bias_fo")) {
-                                hw_ranges.fo_min = bias_ranges.at("bias_fo").min;
-                                hw_ranges.fo_max = bias_ranges.at("bias_fo").max;
+                                hw_ranges.fo_min = bias_ranges["bias_fo"].min;
+                                hw_ranges.fo_max = bias_ranges["bias_fo"].max;
                             }
                             if (bias_ranges.count("bias_hpf")) {
-                                hw_ranges.hpf_min = bias_ranges.at("bias_hpf").min;
-                                hw_ranges.hpf_max = bias_ranges.at("bias_hpf").max;
+                                hw_ranges.hpf_min = bias_ranges["bias_hpf"].min;
+                                hw_ranges.hpf_max = bias_ranges["bias_hpf"].max;
                             }
                         }
 
@@ -1529,25 +1809,24 @@ int main(int argc, char* argv[]) {
                         // Clamp genome to hardware ranges before applying
                         EventCameraGeneticOptimizer::Genome clamped_genome = ga_state.best_genome;
 
-                        // Get hardware ranges from BiasManager and clamp
+                        // Get hardware ranges and clamp
                         EventCameraGeneticOptimizer::Genome::BiasRanges hw_ranges;
-                        const auto& bias_ranges = bias_manager.get_bias_ranges();
                         if (!bias_ranges.empty()) {
                             if (bias_ranges.count("bias_diff")) {
-                                hw_ranges.diff_min = bias_ranges.at("bias_diff").min;
-                                hw_ranges.diff_max = bias_ranges.at("bias_diff").max;
+                                hw_ranges.diff_min = bias_ranges["bias_diff"].min;
+                                hw_ranges.diff_max = bias_ranges["bias_diff"].max;
                             }
                             if (bias_ranges.count("bias_refr")) {
-                                hw_ranges.refr_min = bias_ranges.at("bias_refr").min;
-                                hw_ranges.refr_max = bias_ranges.at("bias_refr").max;
+                                hw_ranges.refr_min = bias_ranges["bias_refr"].min;
+                                hw_ranges.refr_max = bias_ranges["bias_refr"].max;
                             }
                             if (bias_ranges.count("bias_fo")) {
-                                hw_ranges.fo_min = bias_ranges.at("bias_fo").min;
-                                hw_ranges.fo_max = bias_ranges.at("bias_fo").max;
+                                hw_ranges.fo_min = bias_ranges["bias_fo"].min;
+                                hw_ranges.fo_max = bias_ranges["bias_fo"].max;
                             }
                             if (bias_ranges.count("bias_hpf")) {
-                                hw_ranges.hpf_min = bias_ranges.at("bias_hpf").min;
-                                hw_ranges.hpf_max = bias_ranges.at("bias_hpf").max;
+                                hw_ranges.hpf_min = bias_ranges["bias_hpf"].min;
+                                hw_ranges.hpf_max = bias_ranges["bias_hpf"].max;
                             }
                         }
                         clamped_genome.set_ranges(hw_ranges);

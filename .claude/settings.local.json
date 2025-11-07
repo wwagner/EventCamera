@@ -23,7 +23,8 @@
       "Bash(Select-String -Pattern \"error|undefined|undeclared\")",
       "Bash(Select-Object -First 20)",
       "Bash(Select-String \"error C\")",
-      "Bash(Select-Object -First 30)"
+      "Bash(Select-Object -First 30)",
+      "Bash(temp_old_main.cpp)"
     ],
     "deny": [],
     "ask": []
