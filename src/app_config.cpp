@@ -93,9 +93,11 @@ bool AppConfig::load(const std::string& filename) {
         // Parse based on section
         if (section == "Camera") {
             if (key == "bias_diff") camera_settings_.bias_diff = std::stoi(value);
-            else if (key == "bias_refr") camera_settings_.bias_refr = std::stoi(value);
+            else if (key == "bias_diff_on") camera_settings_.bias_diff_on = std::stoi(value);
+            else if (key == "bias_diff_off") camera_settings_.bias_diff_off = std::stoi(value);
             else if (key == "bias_fo") camera_settings_.bias_fo = std::stoi(value);
             else if (key == "bias_hpf") camera_settings_.bias_hpf = std::stoi(value);
+            else if (key == "bias_refr") camera_settings_.bias_refr = std::stoi(value);
             else if (key == "accumulation_time_s") camera_settings_.accumulation_time_s = std::stof(value);
             // Backward compatibility: convert microseconds to seconds if old key is used
             else if (key == "accumulation_time_us") camera_settings_.accumulation_time_s = std::stof(value) / 1000000.0f;

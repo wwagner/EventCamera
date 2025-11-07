@@ -16,7 +16,7 @@ bool BiasManager::initialize(Metavision::Camera& camera) {
     }
 
     // Query ranges for standard biases
-    std::vector<std::string> bias_names = {"bias_diff", "bias_refr", "bias_fo", "bias_hpf"};
+    std::vector<std::string> bias_names = {"bias_diff", "bias_diff_on", "bias_diff_off", "bias_fo", "bias_hpf", "bias_refr"};
 
     bias_ranges_.clear();
     for (const auto& name : bias_names) {
@@ -45,11 +45,13 @@ bool BiasManager::initialize(Metavision::Camera& camera) {
 void BiasManager::setup_simulation_defaults() {
     std::lock_guard<std::mutex> lock(mutex_);
 
-    // Set up reasonable default ranges for simulation mode
+    // Set up default ranges for simulation mode (matching hardware specs)
     bias_ranges_["bias_diff"] = {-25, 23, 0};
-    bias_ranges_["bias_refr"] = {-25, 23, 0};
-    bias_ranges_["bias_fo"] = {-25, 23, 0};
-    bias_ranges_["bias_hpf"] = {-25, 23, 0};
+    bias_ranges_["bias_diff_on"] = {-85, 140, 0};
+    bias_ranges_["bias_diff_off"] = {-35, 190, 0};
+    bias_ranges_["bias_fo"] = {-35, 55, 0};
+    bias_ranges_["bias_hpf"] = {0, 120, 0};
+    bias_ranges_["bias_refr"] = {-20, 235, 0};
 
     // Initialize slider positions to middle
     for (const auto& [name, range] : bias_ranges_) {

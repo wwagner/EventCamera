@@ -74,19 +74,27 @@ void SettingsPanel::render_bias_controls() {
     ImGui::Spacing();
 
     // Use BiasManager to render bias controls
-    if (bias_mgr_.render_bias_ui("bias_diff", "bias_diff", "Event threshold")) {
+    if (bias_mgr_.render_bias_ui("bias_diff", "bias_diff", "Event threshold (not recommended to change)")) {
         settings_changed_ = true;
     }
 
-    if (bias_mgr_.render_bias_ui("bias_refr", "bias_refr", "Refractory")) {
+    if (bias_mgr_.render_bias_ui("bias_diff_on", "bias_diff_on", "ON event threshold")) {
         settings_changed_ = true;
     }
 
-    if (bias_mgr_.render_bias_ui("bias_fo", "bias_fo", "Follower")) {
+    if (bias_mgr_.render_bias_ui("bias_diff_off", "bias_diff_off", "OFF event threshold")) {
         settings_changed_ = true;
     }
 
-    if (bias_mgr_.render_bias_ui("bias_hpf", "bias_hpf", "High-pass")) {
+    if (bias_mgr_.render_bias_ui("bias_fo", "bias_fo", "Photoreceptor follower")) {
+        settings_changed_ = true;
+    }
+
+    if (bias_mgr_.render_bias_ui("bias_hpf", "bias_hpf", "High-pass filter")) {
+        settings_changed_ = true;
+    }
+
+    if (bias_mgr_.render_bias_ui("bias_refr", "bias_refr", "Refractory period")) {
         settings_changed_ = true;
     }
 }

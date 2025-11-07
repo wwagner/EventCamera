@@ -29,10 +29,12 @@ class AppConfig {
 public:
     // Camera hardware settings
     struct CameraSettings {
-        int bias_diff = 128;        // Event detection threshold (0-255)
-        int bias_refr = 128;        // Refractory period (0-255)
-        int bias_fo = 128;          // Photoreceptor follower (0-255)
-        int bias_hpf = 128;         // High-pass filter (0-255)
+        int bias_diff = 0;          // Event detection threshold (-25 to 23)
+        int bias_diff_on = 0;       // ON event threshold (-85 to 140)
+        int bias_diff_off = 0;      // OFF event threshold (-35 to 190)
+        int bias_fo = 0;            // Photoreceptor follower (-35 to 55)
+        int bias_hpf = 0;           // High-pass filter (0 to 120)
+        int bias_refr = 0;          // Refractory period (-20 to 235)
         float accumulation_time_s = 0.01f;  // Event accumulation period (0.001-0.05 seconds)
         std::string capture_directory = "C:\\Users\\wolfw\\OneDrive\\Desktop";  // Directory for saving captured frames
 
