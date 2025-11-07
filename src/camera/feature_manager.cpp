@@ -44,6 +44,12 @@ void FeatureManager::shutdown_all() {
     }
 }
 
+void FeatureManager::clear() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    features_.clear();
+    std::cout << "Feature manager cleared" << std::endl;
+}
+
 std::vector<std::shared_ptr<IHardwareFeature>>
 FeatureManager::get_features_by_category(FeatureCategory category) {
     std::lock_guard<std::mutex> lock(mutex_);

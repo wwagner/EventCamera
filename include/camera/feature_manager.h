@@ -41,6 +41,13 @@ public:
     void shutdown_all();
 
     /**
+     * @brief Clear all registered features
+     *
+     * Removes all features from the manager. Should be called after shutdown_all().
+     */
+    void clear();
+
+    /**
      * @brief Get all features in a specific category
      * @param category The feature category to filter by
      * @return Vector of features in the specified category

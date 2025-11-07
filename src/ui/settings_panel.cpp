@@ -461,6 +461,11 @@ void SettingsPanel::render_digital_features() {
     // Use FeatureManager to render all digital features
     state_.feature_manager().render_all_ui();
 
+    // Debug: show if no features rendered
+    // This will be visible if no features are available
+    ImGui::Spacing();
+    ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Note: Only available features shown above");
+
     /* OLD MANUAL CODE - REPLACED BY FEATUREMANAGER
     auto& cam_info = state_.camera_state().camera_manager()->get_camera(0);
 

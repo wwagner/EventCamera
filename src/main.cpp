@@ -856,6 +856,10 @@ int main(int argc, char* argv[]) {
             // Reset the running flag so camera can start again
             app_state->reset_running_flag();
 
+            // Shutdown and clear hardware features
+            app_state->feature_manager().shutdown_all();
+            app_state->feature_manager().clear();
+
             // Clear camera resources
             app_state->camera_state().frame_generator().reset();
             app_state->camera_state().camera_manager().reset();
