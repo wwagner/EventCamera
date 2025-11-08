@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(./build/bin/Release/event_camera_viewer.exe:*)"
+      "Bash(git push:*)",
+      "Bash(taskkill:*)",
+      "Bash(git commit:*)",
+      "Bash(powershell -Command:*)"
     ],
     "deny": [],
     "ask": []

@@ -383,6 +383,7 @@ EventCameraGeneticOptimizer::FitnessResult evaluate_genome_fitness(
         if (genome.enable_trail_filter) {
             auto* trail_filter = cam_info.camera->get_device().get_facility<Metavision::I_EventTrailFilterModule>();
             if (trail_filter) {
+                trail_filter->set_type(Metavision::I_EventTrailFilterModule::Type::STC_KEEP_TRAIL);
                 trail_filter->enable(true);
                 trail_filter->set_threshold(genome.trail_threshold_us);
             }

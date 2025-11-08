@@ -51,11 +51,13 @@ void EventCameraGeneticOptimizer::Genome::randomize(mt19937& rng) {
     uniform_real_distribution<float> log_accum_dist(log(0.001f), log(0.1f));
     accumulation_time_s = exp(log_accum_dist(rng));
 
-    // Randomize trail filter
-    bernoulli_distribution enable_dist(0.3);  // 30% chance to enable
-    enable_trail_filter = enable_dist(rng);
+    // Trail filter: Always enabled when optimizing, only randomize threshold
+    enable_trail_filter = true;  // Always ON - filter type will be STC_KEEP_TRAIL
     uniform_int_distribution<int> trail_dist(ranges.trail_min, ranges.trail_max);
     trail_threshold_us = trail_dist(rng);
+
+    // Boolean distribution for optional features
+    bernoulli_distribution enable_dist(0.5);
 
     // Randomize anti-flicker
     enable_antiflicker = enable_dist(rng);
@@ -419,10 +421,7 @@ void EventCameraGeneticOptimizer::mutate(Genome& genome) {
         genome.accumulation_time_s = exp(log_val);
     }
 
-    // Mutate trail filter
-    if (mutate_dist(rng_)) {
-        genome.enable_trail_filter = !genome.enable_trail_filter;
-    }
+    // Mutate trail filter threshold only (enable is always true, type is STC_KEEP_TRAIL)
     if (mutate_dist(rng_)) {
         int range = genome.ranges.trail_max - genome.ranges.trail_min;
         normal_distribution<float> noise(0.0f, params_.mutation_strength * range);
