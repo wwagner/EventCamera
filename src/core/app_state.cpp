@@ -20,7 +20,6 @@ AppState::AppState() {
     frame_processor_->add_filter(subtraction_filter_);
 
     // Initialize core subsystems
-    frame_sync_ = std::make_unique<FrameSync>();
     event_metrics_ = std::make_unique<EventMetrics>();
     display_settings_ = std::make_unique<DisplaySettings>();
     camera_state_ = std::make_unique<CameraState>();
@@ -49,8 +48,8 @@ std::shared_ptr<video::SubtractionFilter> AppState::subtraction_filter() {
     return subtraction_filter_;
 }
 
-FrameSync& AppState::frame_sync() {
-    return *frame_sync_;
+FrameSync& AppState::frame_sync(int camera_index) {
+    return camera_state_->frame_sync(camera_index);
 }
 
 EventMetrics& AppState::event_metrics() {

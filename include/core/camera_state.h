@@ -13,6 +13,10 @@ namespace Metavision {
 }
 
 namespace core {
+    class FrameSync;  // Forward declaration
+}
+
+namespace core {
 
 /**
  * Camera connection and lifecycle state
@@ -95,12 +99,20 @@ public:
      */
     std::mutex& connection_mutex();
 
+    /**
+     * Get frame sync for camera index
+     * @param camera_index Camera index (0 or 1)
+     * @return Reference to FrameSync object for this camera
+     */
+    FrameSync& frame_sync(int camera_index = 0);
+
 private:
     static constexpr int MAX_CAMERAS = 2;
 
     std::unique_ptr<CameraManager> camera_mgr_;
     std::unique_ptr<Metavision::PeriodicFrameGenerationAlgorithm> frame_gens_[MAX_CAMERAS];
     std::unique_ptr<std::thread> event_threads_[MAX_CAMERAS];
+    std::unique_ptr<FrameSync> frame_syncs_[MAX_CAMERAS];
     std::atomic<bool> camera_connected_{false};
     std::atomic<bool> simulation_mode_{false};
     std::atomic<int64_t> camera_start_time_us_{0};

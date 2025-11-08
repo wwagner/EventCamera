@@ -361,15 +361,15 @@ EventCameraGeneticOptimizer::FitnessResult evaluate_genome_fitness(
                     cv::cvtColor(display_frame, display_frame, cv::COLOR_GRAY2BGR);
                 }
 
-                // Rate limit display updates to target FPS
+                // Rate limit display updates to target FPS (GA uses camera 0)
                 auto now = std::chrono::steady_clock::now();
                 auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
                 int fps_target = app_state->display_settings().get_target_fps();
 
-                // Check if enough time has passed since last display
-                if (app_state->frame_sync().should_display_frame(now_us, fps_target)) {
-                    app_state->frame_sync().on_frame_generated(ts, now_us);
-                    app_state->frame_sync().on_frame_displayed(now_us);
+                // Check if enough time has passed since last display for camera 0
+                if (app_state->frame_sync(0).should_display_frame(now_us, fps_target)) {
+                    app_state->frame_sync(0).on_frame_generated(ts, now_us);
+                    app_state->frame_sync(0).on_frame_displayed(now_us);
                     update_texture(display_frame, 0);  // GA test uses camera 0
                 }
             });
@@ -715,15 +715,15 @@ bool try_connect_camera(AppConfig& config, EventCamera::BiasManager& bias_mgr,
                     cv::cvtColor(frame, frame, cv::COLOR_GRAY2BGR);
                 }
 
-                // Rate limit display updates to target FPS
+                // Rate limit display updates to target FPS (per-camera)
                 auto now = std::chrono::steady_clock::now();
                 auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
                 int fps_target = app_state->display_settings().get_target_fps();
 
-                // Check if enough time has passed since last display
-                if (app_state->frame_sync().should_display_frame(now_us, fps_target)) {
-                    app_state->frame_sync().on_frame_generated(ts, now_us);
-                    app_state->frame_sync().on_frame_displayed(now_us);
+                // Check if enough time has passed since last display for THIS camera
+                if (app_state->frame_sync(camera_index).should_display_frame(now_us, fps_target)) {
+                    app_state->frame_sync(camera_index).on_frame_generated(ts, now_us);
+                    app_state->frame_sync(camera_index).on_frame_displayed(now_us);
                     update_texture(frame, camera_index);  // Uses FrameBuffer which handles dropping
                 }
                 // Note: frame_buffer tracks its own dropped/generated statistics

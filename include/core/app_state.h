@@ -66,10 +66,11 @@ public:
     std::shared_ptr<video::SubtractionFilter> subtraction_filter();
 
     /**
-     * Get frame sync
-     * @return Reference to frame sync
+     * Get frame sync for camera index
+     * @param camera_index Camera index (0 or 1)
+     * @return Reference to frame sync for this camera
      */
-    FrameSync& frame_sync();
+    FrameSync& frame_sync(int camera_index = 0);
 
     /**
      * Get event metrics
@@ -123,7 +124,6 @@ private:
     std::unique_ptr<video::TextureManager> texture_managers_[MAX_CAMERAS];
     std::shared_ptr<video::ROIFilter> roi_filter_;
     std::shared_ptr<video::SubtractionFilter> subtraction_filter_;
-    std::unique_ptr<FrameSync> frame_sync_;
     std::unique_ptr<EventMetrics> event_metrics_;
     std::unique_ptr<DisplaySettings> display_settings_;
     std::unique_ptr<CameraState> camera_state_;

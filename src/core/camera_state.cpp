@@ -1,6 +1,7 @@
 #include "core/camera_state.h"
 #include <metavision/sdk/core/algorithms/periodic_frame_generation_algorithm.h>
 #include "camera_manager.h"
+#include "core/frame_sync.h"
 
 namespace core {
 
@@ -47,6 +48,13 @@ int CameraState::num_cameras() const {
 
 std::mutex& CameraState::connection_mutex() {
     return connection_mutex_;
+}
+
+FrameSync& CameraState::frame_sync(int camera_index) {
+    if (!frame_syncs_[camera_index]) {
+        frame_syncs_[camera_index] = std::make_unique<FrameSync>();
+    }
+    return *frame_syncs_[camera_index];
 }
 
 } // namespace core
