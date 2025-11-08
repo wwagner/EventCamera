@@ -6,6 +6,31 @@ All notable changes to the Event Camera Viewer project are documented in this fi
 
 ### Added
 
+#### Genetic Algorithm Improvements
+
+- **Parameter Selection System**: Full control over which parameters to optimize
+  - Added OptimizationMask structure to selectively enable/disable parameter optimization
+  - UI checkboxes now properly control GA behavior (previously non-functional)
+  - Only selected parameters are randomized during population initialization
+  - Only selected parameters are mutated during evolution
+  - Prevents unwanted parameter changes during optimization
+  - Location: `include/event_camera_genetic_optimizer.h:69`, `src/event_camera_genetic_optimizer.cpp:34-93`, `src/main.cpp:1196-1206, 1613-1623`
+
+- **Trail Filter GA Mode**: Automatic STC_KEEP_TRAIL configuration
+  - Trail filter always enabled during GA optimization (not randomly toggled)
+  - Automatically uses STC_KEEP_TRAIL filter type for consistent results
+  - Only optimizes threshold value (enable state fixed to ON)
+  - Ensures repeatable, predictable trail filter behavior during evolution
+  - Location: `src/event_camera_genetic_optimizer.cpp:67-72`, `src/main.cpp:386`
+
+- **Improved Config Defaults**: Better GA parameter defaults in event_config.ini
+  - `frames_per_eval` increased from 5 to 30 (prevents fitness calculation errors)
+  - `population_size` reduced from 40 to 30 (balanced performance)
+  - `mutation_rate` reduced from 0.40 to 0.15 (more stable convergence)
+  - `num_generations` increased from 15 to 20 (better optimization)
+  - Added documentation explaining minimum requirements (≥2 frames for temporal variance)
+  - Fixes huge fitness values (500,000+) caused by insufficient frame capture
+
 #### Display Processing Features
 
 - **Binary Stream Processing**: Ultra-fast LUT-based pixel range filtering
