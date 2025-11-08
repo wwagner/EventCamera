@@ -207,6 +207,12 @@ void EventCameraGeneticOptimizer::initialize_population() {
     cout << "Initializing population..." << endl;
 
     for (int i = 0; i < params_.population_size; ++i) {
+        // Check for stop request
+        if (should_stop_) {
+            cout << "Population initialization stopped by user" << endl;
+            break;
+        }
+
         population_[i].randomize(rng_);
         fitness_cache_[i] = evaluate_fitness(population_[i]);
 
@@ -238,6 +244,7 @@ EventCameraGeneticOptimizer::evaluate_fitness(const Genome& genome) {
         result.combined_fitness = params_.alpha * (1.0f / result.contrast_score)
                                 + params_.beta * result.noise_metric
                                 + params_.gamma * result.isolated_pixel_ratio
+                                + params_.epsilon * result.cluster_fill_metric
                                 + event_penalty;
     } else {
         result.combined_fitness = 1e9f;  // Invalid
@@ -265,6 +272,11 @@ void EventCameraGeneticOptimizer::selection_and_reproduction() {
     // Add elite
     float previous_best = best_fitness_;
     for (int i = 0; i < num_elite; ++i) {
+        // Check for stop request
+        if (should_stop_) {
+            break;
+        }
+
         new_population.push_back(population_[indices[i]]);
         new_fitness.push_back(fitness_cache_[indices[i]]);
 
@@ -276,6 +288,12 @@ void EventCameraGeneticOptimizer::selection_and_reproduction() {
 
     // Fill rest with offspring
     while (new_population.size() < static_cast<size_t>(params_.population_size)) {
+        // Check for stop request
+        if (should_stop_) {
+            cout << "Reproduction stopped by user" << endl;
+            break;
+        }
+
         // Select parents
         int parent1_idx = tournament_selection();
         int parent2_idx = tournament_selection();
@@ -567,7 +585,7 @@ float EventCameraGeneticOptimizer::calculate_spatial_noise(const cv::Mat& frame)
     return static_cast<float>(stddev[0]);
 }
 
-float EventCameraGeneticOptimizer::calculate_isolated_pixels(const cv::Mat& frame) {
+float EventCameraGeneticOptimizer::calculate_isolated_pixels(const cv::Mat& frame, int min_cluster_radius) {
     if (frame.empty()) return 1e6f;
 
     // Convert to grayscale if needed
@@ -586,9 +604,11 @@ float EventCameraGeneticOptimizer::calculate_isolated_pixels(const cv::Mat& fram
     int pixels_before = cv::countNonZero(binary);
     if (pixels_before == 0) return 0.0f;  // No events, good
 
-    // Erode to remove isolated single pixels
+    // Erode to remove isolated pixels and small clusters using specified radius
+    // Kernel size = 2*radius + 1 (e.g., radius=2 -> 5x5 kernel)
+    int kernel_size = 2 * min_cluster_radius + 1;
     cv::Mat eroded;
-    cv::Mat kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3));
+    cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(kernel_size, kernel_size));
     cv::erode(binary, eroded, kernel);
 
     // Count active pixels after erosion (these are clustered)
@@ -602,10 +622,175 @@ float EventCameraGeneticOptimizer::calculate_isolated_pixels(const cv::Mat& fram
     return isolated_ratio;
 }
 
+float EventCameraGeneticOptimizer::calculate_cluster_fill(const cv::Mat& frame, int min_cluster_radius) {
+    if (frame.empty()) return 1e6f;
+
+    // Convert to grayscale if needed
+    cv::Mat gray;
+    if (frame.channels() == 3) {
+        cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
+    } else {
+        gray = frame;
+    }
+
+    // Threshold to find bright pixels (events)
+    cv::Mat binary;
+    cv::threshold(gray, binary, 10, 255, cv::THRESH_BINARY);
+
+    int pixels_before = cv::countNonZero(binary);
+    if (pixels_before == 0) return 0.0f;  // No events, perfect fill
+
+    // Apply closing operation to fill small gaps and connect nearby pixels
+    // Closing = dilation followed by erosion - bridges small gaps
+    int kernel_size = 2 * min_cluster_radius + 1;
+    cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(kernel_size, kernel_size));
+    cv::Mat closed;
+    cv::morphologyEx(binary, closed, cv::MORPH_CLOSE, kernel);
+
+    // Apply opening operation to remove noise while preserving structure
+    // Opening = erosion followed by dilation - removes isolated pixels
+    cv::Mat opened;
+    cv::morphologyEx(closed, opened, cv::MORPH_OPEN, kernel);
+
+    int pixels_after = cv::countNonZero(opened);
+
+    // Calculate fill ratio: how many pixels remain after morphological ops
+    // Higher ratio = better fill (pixels bridge together well)
+    // Lower ratio = poor fill (many gaps and isolated pixels)
+    float fill_ratio = (pixels_before > 0) ?
+        static_cast<float>(pixels_after) / static_cast<float>(pixels_before) : 0.0f;
+
+    // Return inverted (1 - ratio) so 0.0 = perfect fill, 1.0 = no fill
+    return 1.0f - fill_ratio;
+}
+
+float EventCameraGeneticOptimizer::calculate_connected_component_fitness(
+    const cv::Mat& frame,
+    int target_radius,
+    int min_cluster_radius) {
+
+    if (frame.empty()) {
+        return 1e6f;  // Invalid
+    }
+
+    // Convert to grayscale if needed
+    cv::Mat gray;
+    if (frame.channels() == 3) {
+        cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
+    } else {
+        gray = frame;
+    }
+
+    // Threshold to find bright pixels (events)
+    cv::Mat binary;
+    cv::threshold(gray, binary, 10, 255, cv::THRESH_BINARY);
+
+    // Find connected components
+    cv::Mat labels, stats, centroids;
+    int num_components = cv::connectedComponentsWithStats(binary, labels, stats, centroids, 8, CV_32S);
+
+    // Calculate target area from target radius
+    float target_area = CV_PI * target_radius * target_radius;
+
+    float total_penalty = 0.0f;
+    int num_valid_components = 0;
+    int num_undersized = 0;
+    float total_solidity_penalty = 0.0f;
+
+    // Analyze each component (skip 0 which is background)
+    for (int i = 1; i < num_components; i++) {
+        int area = stats.at<int>(i, cv::CC_STAT_AREA);
+
+        // Calculate equivalent radius from area
+        float equivalent_radius = std::sqrt(area / CV_PI);
+
+        if (equivalent_radius < min_cluster_radius) {
+            // Too small - likely noise, heavy penalty
+            total_penalty += 10.0f;
+            continue;
+        }
+
+        // Calculate solidity (compactness) of this component
+        // Extract the component's pixels
+        cv::Mat component_mask = (labels == i);
+
+        // Find contours for this component
+        std::vector<std::vector<cv::Point>> contours;
+        cv::findContours(component_mask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+
+        float solidity = 1.0f;  // Default for degenerate cases
+        if (!contours.empty() && contours[0].size() >= 3) {
+            // Calculate convex hull
+            std::vector<cv::Point> hull;
+            cv::convexHull(contours[0], hull);
+
+            // Calculate areas
+            double component_area = cv::contourArea(contours[0]);
+            double hull_area = cv::contourArea(hull);
+
+            if (hull_area > 0) {
+                solidity = static_cast<float>(component_area / hull_area);
+            }
+        }
+
+        // Penalize low solidity (noisy, sparse clusters)
+        // Solid circles have solidity ~1.0, noisy clusters < 0.7
+        float solidity_penalty = 0.0f;
+        if (solidity < 0.8f) {
+            // Heavy penalty for sparse/noisy clusters
+            solidity_penalty = (0.8f - solidity) * 20.0f;  // 0-16 penalty
+            total_solidity_penalty += solidity_penalty;
+        }
+
+        if (equivalent_radius < target_radius) {
+            // Undersized component - penalize based on how much it's missing
+            float deficit = target_radius - equivalent_radius;
+            float deficit_ratio = deficit / target_radius;
+            total_penalty += deficit_ratio * 5.0f + solidity_penalty;
+            num_undersized++;
+        } else {
+            // Component meets or exceeds target
+            num_valid_components++;
+
+            // Reward solid, compact components more
+            float reward = 0.5f;
+            if (solidity > 0.9f) {
+                reward += 1.0f;  // Extra reward for very solid components
+            } else if (solidity > 0.8f) {
+                reward += 0.5f;  // Moderate reward for fairly solid
+            }
+
+            total_penalty -= reward;
+
+            // Add solidity penalty even for valid components
+            total_penalty += solidity_penalty;
+
+            // Small additional reward for being larger (encourages growth)
+            float excess = equivalent_radius - target_radius;
+            if (excess > 0) {
+                total_penalty -= std::min(excess * 0.1f, 1.0f);  // Cap at 1.0 bonus
+            }
+        }
+    }
+
+    // Additional penalties
+    if (num_valid_components == 0) {
+        total_penalty += 50.0f;  // No valid components at all
+    }
+
+    // Add average solidity penalty to overall fitness
+    // This emphasizes the importance of solid, filled dots
+    total_penalty += total_solidity_penalty;
+
+    // Return fitness (lower is better)
+    return total_penalty;
+}
+
 float EventCameraGeneticOptimizer::calculate_cluster_fitness(
     const cv::Mat& frame,
     const std::vector<std::pair<int, int>>& cluster_centers,
-    int cluster_radius) {
+    int cluster_radius,
+    int min_cluster_radius) {
 
     if (frame.empty() || cluster_centers.empty()) {
         return 1e6f;  // Invalid
@@ -619,6 +804,16 @@ float EventCameraGeneticOptimizer::calculate_cluster_fitness(
         gray = frame;
     }
 
+    // Threshold to find bright pixels (events)
+    cv::Mat binary;
+    cv::threshold(gray, binary, 10, 255, cv::THRESH_BINARY);
+
+    // Apply morphological operations to remove isolated pixels
+    int kernel_size = 2 * min_cluster_radius + 1;
+    cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(kernel_size, kernel_size));
+    cv::Mat filtered;
+    cv::erode(binary, filtered, kernel);
+
     // Create mask for cluster regions (circular dots)
     cv::Mat cluster_mask = cv::Mat::zeros(gray.size(), CV_8U);
     for (const auto& center : cluster_centers) {
@@ -626,9 +821,21 @@ float EventCameraGeneticOptimizer::calculate_cluster_fitness(
                   cluster_radius, cv::Scalar(255), -1);  // Filled circle
     }
 
-    // Calculate mean brightness inside cluster regions
+    // Calculate mean brightness inside cluster regions (using filtered events)
     cv::Scalar mean_inside = cv::mean(gray, cluster_mask);
     float brightness_inside = static_cast<float>(mean_inside[0]);
+
+    // Count filtered events inside vs outside cluster regions
+    cv::Mat events_inside_mask;
+    cv::bitwise_and(filtered, cluster_mask, events_inside_mask);
+    int events_inside = cv::countNonZero(events_inside_mask);
+
+    cv::Mat events_outside_mask;
+    cv::bitwise_and(filtered, ~cluster_mask, events_outside_mask);
+    int events_outside = cv::countNonZero(events_outside_mask);
+
+    // Calculate fill metric for overall frame
+    float fill_metric = calculate_cluster_fill(frame, min_cluster_radius);
 
     // Calculate mean brightness outside cluster regions (background)
     cv::Mat outside_mask = ~cluster_mask;
@@ -639,11 +846,15 @@ float EventCameraGeneticOptimizer::calculate_cluster_fitness(
     // Higher contrast = better (bright dots, dark background)
     float contrast = brightness_inside - brightness_outside;
 
-    // Return as fitness (lower is better for optimizer, so negate and normalize)
-    // We want: high contrast (good) and low background noise (good)
-    // fitness = -contrast + background_noise
-    // Normalize: contrast can be 0-255, so we scale appropriately
-    float fitness = -contrast + brightness_outside;
+    // Combined fitness metric (lower is better):
+    // - Penalize low contrast (want bright clusters)
+    // - Penalize events outside cluster regions (noise)
+    // - Penalize poor fill (gaps and isolated pixels)
+    // - Reward high background darkness
+    float fitness = -contrast +
+                   static_cast<float>(events_outside) * 0.1f +  // Penalize noise outside
+                   fill_metric * 100.0f +                        // Penalize poor fill
+                   brightness_outside;                           // Penalize bright background
 
     return fitness;
 }

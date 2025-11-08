@@ -23,4 +23,36 @@ int DisplaySettings::get_image_height() const {
     return image_height_.load();
 }
 
+void DisplaySettings::set_add_images_mode(bool enabled) {
+    add_images_mode_.store(enabled);
+}
+
+bool DisplaySettings::get_add_images_mode() const {
+    return add_images_mode_.load();
+}
+
+void DisplaySettings::set_flip_second_view(bool enabled) {
+    flip_second_view_.store(enabled);
+}
+
+bool DisplaySettings::get_flip_second_view() const {
+    return flip_second_view_.load();
+}
+
+void DisplaySettings::set_grayscale_mode(bool enabled) {
+    grayscale_mode_.store(enabled);
+}
+
+bool DisplaySettings::get_grayscale_mode() const {
+    return grayscale_mode_.load();
+}
+
+void DisplaySettings::set_binary_stream_mode(BinaryStreamMode mode) {
+    binary_stream_mode_.store(static_cast<int>(mode));
+}
+
+DisplaySettings::BinaryStreamMode DisplaySettings::get_binary_stream_mode() const {
+    return static_cast<BinaryStreamMode>(binary_stream_mode_.load());
+}
+
 } // namespace core

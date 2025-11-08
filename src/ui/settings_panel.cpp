@@ -171,9 +171,6 @@ void SettingsPanel::render_connection_controls() {
 }
 
 void SettingsPanel::render_bias_controls() {
-    ImGui::Text("Camera Biases");
-    ImGui::Text("Adjust these to tune event detection");
-    ImGui::Spacing();
 
     auto& cam_settings = config_.camera_settings();
     const auto& bias_ranges = bias_mgr_.get_bias_ranges();
@@ -355,15 +352,52 @@ void SettingsPanel::render_display_settings() {
 
     ImGui::Spacing();
 
-    // Frame subtraction toggle
-    if (state_.subtraction_filter()) {
-        bool diff_enabled = state_.subtraction_filter()->is_enabled();
-        if (ImGui::Checkbox("Enable Frame Subtraction", &diff_enabled)) {
-            state_.subtraction_filter()->set_enabled(diff_enabled);
-            std::cout << "Frame subtraction " << (diff_enabled ? "enabled" : "disabled") << std::endl;
+    // Add Images mode toggle (multi-camera only)
+    if (state_.camera_state().camera_manager() &&
+        state_.camera_state().camera_manager()->num_cameras() >= 2) {
+        bool add_images = state_.display_settings().get_add_images_mode();
+        if (ImGui::Checkbox("Add Images", &add_images)) {
+            state_.display_settings().set_add_images_mode(add_images);
+            std::cout << "Add Images mode " << (add_images ? "enabled" : "disabled") << std::endl;
+        }
+
+        // Flip second view toggle
+        bool flip_second = state_.display_settings().get_flip_second_view();
+        if (ImGui::Checkbox("Flip Second View Horizontally", &flip_second)) {
+            state_.display_settings().set_flip_second_view(flip_second);
+            std::cout << "Flip second view " << (flip_second ? "enabled" : "disabled") << std::endl;
         }
     }
-    ImGui::TextWrapped("Subtract successive frames to visualize motion/changes");
+
+    ImGui::Spacing();
+
+    // Grayscale mode toggle
+    bool grayscale = state_.display_settings().get_grayscale_mode();
+    if (ImGui::Checkbox("Grayscale Output", &grayscale)) {
+        state_.display_settings().set_grayscale_mode(grayscale);
+        std::cout << "Grayscale mode " << (grayscale ? "enabled" : "disabled") << std::endl;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Convert BGR to true single-channel grayscale");
+    }
+
+    // Binary stream mode selector
+    ImGui::Text("Binary Stream Mode (early 1-bit conversion):");
+    auto current_mode = state_.display_settings().get_binary_stream_mode();
+    int mode_index = static_cast<int>(current_mode);
+
+    const char* stream_modes[] = { "OFF (8-bit)", "Down [96-127]", "Up [224-255]", "Up+Down Combined" };
+    if (ImGui::Combo("Stream Mode", &mode_index, stream_modes, 4)) {
+        state_.display_settings().set_binary_stream_mode(
+            static_cast<core::DisplaySettings::BinaryStreamMode>(mode_index));
+        std::cout << "Binary stream mode set to: " << stream_modes[mode_index] << std::endl;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Converts 8-bit stream to 1-bit early in pipeline:\n"
+                         "Down = Range 3 [96-127]\n"
+                         "Up = Range 7 [224-255]\n"
+                         "Up+Down = Both ranges combined");
+    }
 }
 
 void SettingsPanel::render_frame_generation() {
@@ -782,86 +816,49 @@ void SettingsPanel::render_digital_features() {
 void SettingsPanel::render_genetic_algorithm() {
     auto& ga_cfg = config_.ga_settings();
 
-    // Cluster-based fitness evaluation
-    ImGui::Text("Cluster-Based Fitness Evaluation:");
+    // Connected component fitness evaluation
+    ImGui::Text("Connected Component Fitness Evaluation:");
     ImGui::Spacing();
 
     if (ImGui::Checkbox("Enable Cluster Filter", &ga_cfg.enable_cluster_filter)) {
         settings_changed_ = true;
     }
     if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Focus fitness evaluation on circular clusters, suppressing single-pixel noise elsewhere");
+        ImGui::SetTooltip("Find and grow connected pixel groups - rewards components >= target radius");
     }
 
     if (ga_cfg.enable_cluster_filter) {
         ImGui::Indent();
 
-        // Cluster radius slider
-        if (ImGui::SliderInt("Cluster Radius (pixels)", &ga_cfg.cluster_radius, 10, 100)) {
+        // Target radius slider (guideline for connected component size)
+        if (ImGui::SliderInt("Target Radius (pixels)", &ga_cfg.cluster_radius, 1, 50)) {
             settings_changed_ = true;
         }
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Radius of circular cluster regions in pixels");
+            ImGui::SetTooltip("Target radius for connected pixel groups (guideline - larger clusters are rewarded)");
         }
 
         ImGui::Spacing();
-        ImGui::Text("Cluster Centers (x, y):");
 
-        // Display existing clusters with remove buttons
-        std::vector<int> to_remove;
-        for (size_t i = 0; i < ga_cfg.cluster_centers.size(); ++i) {
-            ImGui::PushID(static_cast<int>(i));
-
-            auto& center = ga_cfg.cluster_centers[i];
-            ImGui::Text("  [%d] (%d, %d)", static_cast<int>(i), center.first, center.second);
-            ImGui::SameLine();
-
-            if (ImGui::SmallButton("Remove")) {
-                to_remove.push_back(static_cast<int>(i));
-                settings_changed_ = true;
-            }
-
-            ImGui::PopID();
-        }
-
-        // Remove marked clusters (in reverse order to maintain indices)
-        for (auto it = to_remove.rbegin(); it != to_remove.rend(); ++it) {
-            ga_cfg.cluster_centers.erase(ga_cfg.cluster_centers.begin() + *it);
-        }
-
-        // Add new cluster controls
-        ImGui::Spacing();
-        static int new_cluster_x = 320;  // Center of 640x480 image
-        static int new_cluster_y = 240;
-
-        ImGui::InputInt("New Cluster X", &new_cluster_x);
-        ImGui::InputInt("New Cluster Y", &new_cluster_y);
-
-        if (ImGui::Button("Add Cluster")) {
-            ga_cfg.cluster_centers.emplace_back(new_cluster_x, new_cluster_y);
+        // Use processed pixels checkbox
+        if (ImGui::Checkbox("Use Processed Pixels", &ga_cfg.use_processed_pixels)) {
             settings_changed_ = true;
         }
-
-        ImGui::SameLine();
-        if (ImGui::Button("Clear All Clusters")) {
-            ga_cfg.cluster_centers.clear();
-            settings_changed_ = true;
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Apply grayscale and binary threshold processing to frames before fitness evaluation");
         }
 
         ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
         ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.0f, 1.0f),
-                          "Tip: Add clusters at locations where you expect");
+                          "Tip: GA automatically finds and grows connected");
         ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.0f, 1.0f),
-                          "events (e.g., LEDs, moving objects)");
+                          "pixel groups to match target radius.");
 
         ImGui::Unindent();
     }
-
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-    ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
-                      "Other GA settings can be configured in event_config.ini");
 }
 
 void SettingsPanel::apply_digital_features_to_all_cameras() {

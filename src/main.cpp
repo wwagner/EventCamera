@@ -90,6 +90,65 @@ void update_texture(const cv::Mat& frame, int camera_index) {
     app_state->frame_buffer(camera_index).store_frame(frame);
 }
 
+// Static storage for last combined frame to avoid flickering
+static cv::Mat last_combined_frame;
+
+/**
+ * Combine frames from both cameras by adding pixels
+ * Returns combined frame only when BOTH cameras have frames available
+ * Otherwise returns the last successfully combined frame
+ */
+cv::Mat combine_camera_frames() {
+    if (!app_state) return cv::Mat();
+
+    // Check if BOTH cameras have unconsumed frames
+    bool frame0_ready = app_state->frame_buffer(0).has_unconsumed_frame();
+    bool frame1_ready = app_state->frame_buffer(1).has_unconsumed_frame();
+
+    // Only consume and combine if BOTH cameras have frames
+    if (!frame0_ready || !frame1_ready) {
+        // Return last combined frame to avoid flickering
+        return last_combined_frame;
+    }
+
+    // Both frames are ready - consume them
+    auto frame0_opt = app_state->frame_buffer(0).consume_frame();
+    auto frame1_opt = app_state->frame_buffer(1).consume_frame();
+
+    // Double-check we got both frames
+    if (!frame0_opt || !frame1_opt) {
+        return last_combined_frame;
+    }
+
+    cv::Mat frame0 = frame0_opt.value();
+    cv::Mat frame1 = frame1_opt.value();
+
+    if (frame0.empty() || frame1.empty()) {
+        return last_combined_frame;
+    }
+
+    // Flip second view horizontally if requested
+    if (app_state->display_settings().get_flip_second_view()) {
+        cv::flip(frame1, frame1, 1);  // 1 = flip horizontally
+    }
+
+    // Ensure frames are the same size and type
+    if (frame0.size() != frame1.size() || frame0.type() != frame1.type()) {
+        // Resize frame1 to match frame0 if needed
+        cv::resize(frame1, frame1, frame0.size());
+        frame1.convertTo(frame1, frame0.type());
+    }
+
+    // Add frames together (saturate at 255 for uint8)
+    cv::Mat combined;
+    cv::add(frame0, frame1, combined);
+
+    // Store as last combined frame
+    last_combined_frame = combined.clone();
+
+    return combined;
+}
+
 /**
  * Upload OpenCV frame to OpenGL texture
  */
@@ -102,8 +161,15 @@ void upload_frame_to_gpu(int camera_index) {
         return;  // No new frame available
     }
 
+    cv::Mat frame = frame_opt.value();
+
+    // Flip camera 1 horizontally if requested
+    if (camera_index == 1 && app_state->display_settings().get_flip_second_view()) {
+        cv::flip(frame, frame, 1);  // 1 = flip horizontally
+    }
+
     // Process frame through filter pipeline
-    cv::Mat processed_frame = app_state->frame_processor().process(frame_opt.value());
+    cv::Mat processed_frame = app_state->frame_processor().process(frame);
 
     // Upload to GPU texture
     app_state->texture_manager(camera_index).upload_frame(processed_frame);
@@ -188,9 +254,43 @@ EventCameraGeneticOptimizer::FitnessResult evaluate_genome_fitness(
             app_state->camera_state().frame_generator()->set_output_callback([](const Metavision::timestamp ts, cv::Mat& frame) {
                 if (frame.empty() || !app_state) return;
 
-                // If GA is capturing, store in GA buffer
+                // If GA is capturing, store in GA buffer (unprocessed)
                 if (ga_state.capturing_for_ga) {
                     ga_state.ga_frame_buffer.store_frame(frame.clone());
+                }
+
+                // Apply display processing (for display only, not for GA capture)
+                cv::Mat display_frame = frame.clone();
+
+                // Convert to grayscale if requested
+                if (app_state->display_settings().get_grayscale_mode() && display_frame.channels() == 3) {
+                    cv::Mat gray;
+                    cv::cvtColor(display_frame, gray, cv::COLOR_BGR2GRAY);
+                    cv::cvtColor(gray, display_frame, cv::COLOR_GRAY2BGR);
+                }
+
+                // Convert to binary if requested (show only pixels in specific bit range)
+                if (app_state->display_settings().get_binary_mode() && !display_frame.empty()) {
+                    int threshold_value = app_state->display_settings().get_binary_threshold();
+
+                    cv::Mat mask;
+                    if (threshold_value == 255) {
+                        // Combined mode: Range 3 + Range 7
+                        cv::Mat mask3, mask7;
+                        cv::inRange(display_frame, cv::Scalar(96, 96, 96), cv::Scalar(127, 127, 127), mask3);
+                        cv::inRange(display_frame, cv::Scalar(224, 224, 224), cv::Scalar(255, 255, 255), mask7);
+                        mask = mask3 | mask7;  // Combine masks
+                    } else {
+                        // Single range mode
+                        int lower_bound = threshold_value;
+                        int upper_bound = threshold_value + 31;
+                        cv::inRange(display_frame, cv::Scalar(lower_bound, lower_bound, lower_bound),
+                                   cv::Scalar(upper_bound, upper_bound, upper_bound), mask);
+                    }
+
+                    // Set output: white where in range, black elsewhere
+                    display_frame.setTo(cv::Scalar(0, 0, 0));  // All black
+                    display_frame.setTo(cv::Scalar(255, 255, 255), mask);  // White where in range
                 }
 
                 // Rate limit display updates to target FPS
@@ -202,7 +302,7 @@ EventCameraGeneticOptimizer::FitnessResult evaluate_genome_fitness(
                 if (app_state->frame_sync().should_display_frame(now_us, fps_target)) {
                     app_state->frame_sync().on_frame_generated(ts, now_us);
                     app_state->frame_sync().on_frame_displayed(now_us);
-                    update_texture(frame, 0);  // GA test uses camera 0
+                    update_texture(display_frame, 0);  // GA test uses camera 0
                 }
             });
         }
@@ -275,6 +375,42 @@ EventCameraGeneticOptimizer::FitnessResult evaluate_genome_fitness(
     result.num_valid_frames = captured_frames.size();
     result.total_frames = num_frames;
 
+    // Apply display processing to frames if requested
+    if (config.ga_settings().use_processed_pixels && app_state) {
+        for (auto& frame : captured_frames) {
+            // Apply grayscale conversion if enabled
+            if (app_state->display_settings().get_grayscale_mode() && frame.channels() == 3) {
+                cv::Mat gray;
+                cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
+                cv::cvtColor(gray, frame, cv::COLOR_GRAY2BGR);
+            }
+
+            // Apply binary threshold if enabled (show only pixels in specific bit range)
+            if (app_state->display_settings().get_binary_mode() && !frame.empty()) {
+                int threshold_value = app_state->display_settings().get_binary_threshold();
+
+                cv::Mat mask;
+                if (threshold_value == 255) {
+                    // Combined mode: Range 3 + Range 7
+                    cv::Mat mask3, mask7;
+                    cv::inRange(frame, cv::Scalar(96, 96, 96), cv::Scalar(127, 127, 127), mask3);
+                    cv::inRange(frame, cv::Scalar(224, 224, 224), cv::Scalar(255, 255, 255), mask7);
+                    mask = mask3 | mask7;  // Combine masks
+                } else {
+                    // Single range mode
+                    int lower_bound = threshold_value;
+                    int upper_bound = threshold_value + 31;
+                    cv::inRange(frame, cv::Scalar(lower_bound, lower_bound, lower_bound),
+                               cv::Scalar(upper_bound, upper_bound, upper_bound), mask);
+                }
+
+                // Set output: white where in range, black elsewhere
+                frame.setTo(cv::Scalar(0, 0, 0));  // All black
+                frame.setTo(cv::Scalar(255, 255, 255), mask);  // White where in range
+            }
+        }
+    }
+
     // If cluster filter is enabled, use cluster-based metrics
     if (config.ga_settings().enable_cluster_filter && !config.ga_settings().cluster_centers.empty()) {
         // Calculate cluster-based metrics: reward clustered pixels, penalize isolated noise
@@ -294,42 +430,29 @@ EventCameraGeneticOptimizer::FitnessResult evaluate_genome_fitness(
             result.contrast_score = 0.01f;
             result.noise_metric = 0.0f;
             result.isolated_pixel_ratio = 0.0f;
+            result.cluster_fill_metric = 1.0f;
         } else {
-            // Apply erosion to remove isolated single pixels
-            cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
-            cv::Mat eroded;
-            cv::erode(binary, eroded, kernel);
+            // Use connected component analysis to find and evaluate pixel groups
+            float component_fitness = EventCameraGeneticOptimizer::calculate_connected_component_fitness(
+                captured_frames[0],
+                config.ga_settings().cluster_radius,  // Use as target radius
+                config.ga_settings().min_cluster_radius);
 
-            // Count clustered pixels (survived erosion = truly clustered)
-            int clustered_pixels = cv::countNonZero(eroded);
+            // Convert component fitness to contrast/noise metrics for consistency
+            // Lower component_fitness = better (more components meeting target)
+            // We want high contrast and low noise
 
-            // Count isolated pixels (removed by erosion = noise)
-            int isolated_pixels = total_pixels - clustered_pixels;
+            // Invert for contrast (lower fitness = higher contrast)
+            result.contrast_score = std::max(0.1f, 100.0f - component_fitness);
 
-            // Create mask for cluster regions
-            cv::Mat cluster_mask = cv::Mat::zeros(gray.size(), CV_8U);
-            for (const auto& center : config.ga_settings().cluster_centers) {
-                cv::circle(cluster_mask, cv::Point(center.first, center.second),
-                          config.ga_settings().cluster_radius, cv::Scalar(255), -1);
-            }
+            // Use fitness directly as noise (lower is better)
+            result.noise_metric = component_fitness;
 
-            // Count events inside vs outside cluster regions
-            cv::Mat events_in_clusters;
-            cv::bitwise_and(eroded, cluster_mask, events_in_clusters);  // Use eroded (clustered) pixels
-            int events_inside = cv::countNonZero(events_in_clusters);
+            // Calculate fill metric for additional quality assessment
+            result.cluster_fill_metric = EventCameraGeneticOptimizer::calculate_cluster_fill(
+                captured_frames[0], config.ga_settings().min_cluster_radius);
 
-            cv::Mat events_outside_mat;
-            cv::bitwise_and(binary, ~cluster_mask, events_outside_mat);  // All events outside
-            int events_outside = cv::countNonZero(events_outside_mat);
-
-            // Contrast = clustered pixels in target regions (want HIGH)
-            // Higher is better - more real clustered events in our target areas
-            result.contrast_score = static_cast<float>(events_inside) + 0.1f;  // +0.1 to avoid divide by zero
-
-            // Noise = isolated pixels + events outside regions (want LOW)
-            result.noise_metric = static_cast<float>(isolated_pixels + events_outside);
-
-            result.isolated_pixel_ratio = 0.0f;  // Not used in cluster mode
+            result.isolated_pixel_ratio = 0.0f;  // Not used in connected component mode
         }
 
     } else {
@@ -345,8 +468,13 @@ EventCameraGeneticOptimizer::FitnessResult evaluate_genome_fitness(
         result.spatial_noise = EventCameraGeneticOptimizer::calculate_spatial_noise(captured_frames[0]);
         result.noise_metric = result.temporal_variance + result.spatial_noise;
 
-        // Calculate isolated pixel ratio (single-pixel noise)
-        result.isolated_pixel_ratio = EventCameraGeneticOptimizer::calculate_isolated_pixels(captured_frames[0]);
+        // Calculate isolated pixel ratio (single-pixel noise) with radius 2
+        result.isolated_pixel_ratio = EventCameraGeneticOptimizer::calculate_isolated_pixels(
+            captured_frames[0], 2);
+
+        // Calculate fill metric for cluster quality
+        result.cluster_fill_metric = EventCameraGeneticOptimizer::calculate_cluster_fill(
+            captured_frames[0], 2);
     }
 
     // Calculate total event pixels (bright pixels above threshold)
@@ -515,6 +643,50 @@ bool try_connect_camera(AppConfig& config, EventCamera::BiasManager& bias_mgr,
         app_state->camera_state().frame_generator(i)->set_output_callback(
             [camera_index](const Metavision::timestamp ts, cv::Mat& frame) {
                 if (frame.empty() || !app_state) return;
+
+                // Debug: Print frame info once
+                static bool printed_once = false;
+                if (!printed_once) {
+                    std::cout << "Frame info: "
+                              << "channels=" << frame.channels()
+                              << " type=" << frame.type()
+                              << " CV_8UC1=" << CV_8UC1
+                              << " CV_8UC3=" << CV_8UC3
+                              << " size=" << frame.size()
+                              << std::endl;
+                    printed_once = true;
+                }
+
+                // Convert to grayscale if requested (BGR -> GRAY -> BGR for display compatibility)
+                if (app_state->display_settings().get_grayscale_mode() && frame.channels() == 3) {
+                    cv::Mat gray;
+                    cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
+                    cv::cvtColor(gray, frame, cv::COLOR_GRAY2BGR);
+                }
+
+                // Convert to binary if requested (show only pixels in specific bit range)
+                if (app_state->display_settings().get_binary_mode() && !frame.empty()) {
+                    int threshold_value = app_state->display_settings().get_binary_threshold();
+
+                    cv::Mat mask;
+                    if (threshold_value == 255) {
+                        // Combined mode: Range 3 + Range 7
+                        cv::Mat mask3, mask7;
+                        cv::inRange(frame, cv::Scalar(96, 96, 96), cv::Scalar(127, 127, 127), mask3);
+                        cv::inRange(frame, cv::Scalar(224, 224, 224), cv::Scalar(255, 255, 255), mask7);
+                        mask = mask3 | mask7;  // Combine masks
+                    } else {
+                        // Single range mode
+                        int lower_bound = threshold_value;
+                        int upper_bound = threshold_value + 31;
+                        cv::inRange(frame, cv::Scalar(lower_bound, lower_bound, lower_bound),
+                                   cv::Scalar(upper_bound, upper_bound, upper_bound), mask);
+                    }
+
+                    // Set output: white where in range, black elsewhere
+                    frame.setTo(cv::Scalar(0, 0, 0));  // All black
+                    frame.setTo(cv::Scalar(255, 255, 255), mask);  // White where in range
+                }
 
                 // Rate limit display updates to target FPS
                 auto now = std::chrono::steady_clock::now();
@@ -886,12 +1058,10 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // Genetic Algorithm Optimization section
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
+        // GA optimization UI is now in the "Genetic Optimization" strip
+        // (Removed duplicate GA UI section that was here)
 
-        if (ImGui::CollapsingHeader("Genetic Algorithm Optimization", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (false) {  // Disabled - GA UI moved to settings strips
             auto& ga_cfg = config.ga_settings();
 
             if (!ga_state.running) {
@@ -1060,7 +1230,12 @@ int main(int argc, char* argv[]) {
                     if (ga_state.optimizer) {
                         ga_state.optimizer->stop();
                     }
+                    // Wait for thread to finish before allowing restart
+                    if (ga_state.optimizer_thread && ga_state.optimizer_thread->joinable()) {
+                        ga_state.optimizer_thread->join();
+                    }
                     ga_state.running = false;
+                    std::cout << "GA optimization stopped successfully" << std::endl;
                 }
             }
 
@@ -1145,13 +1320,28 @@ int main(int argc, char* argv[]) {
         float single_cam_height = (single_cam_width / camera_aspect) + 30.0f;  // +30 for title bar
         float settings_top = single_cam_height + 20.0f;  // Settings start below cameras
 
-        // Camera 0 (Left)
-        if (num_cameras > 0) {
-            ImGui::SetNextWindowPos(ImVec2(cam_spacing, cam_spacing), ImGuiCond_FirstUseEver);
-            ImGui::SetNextWindowSize(ImVec2(single_cam_width, single_cam_height), ImGuiCond_FirstUseEver);
+        // Check if we should display combined view or separate views
+        bool add_images_mode = app_state->display_settings().get_add_images_mode();
 
-            if (ImGui::Begin("Camera 0")) {
-                upload_frame_to_gpu(0);
+        if (add_images_mode && num_cameras >= 2) {
+            // === COMBINED VIEW MODE: Single window showing added frames ===
+            float combined_width = window_width - 2 * cam_spacing;
+            float combined_height = (combined_width / camera_aspect) + 30.0f;
+
+            ImGui::SetNextWindowPos(ImVec2(cam_spacing, cam_spacing), ImGuiCond_FirstUseEver);
+            ImGui::SetNextWindowSize(ImVec2(combined_width, combined_height), ImGuiCond_FirstUseEver);
+
+            if (ImGui::Begin("Combined Camera View (Added)")) {
+                // Combine frames from both cameras
+                cv::Mat combined_frame = combine_camera_frames();
+
+                if (!combined_frame.empty()) {
+                    // Process combined frame
+                    cv::Mat processed_frame = app_state->frame_processor().process(combined_frame);
+
+                    // Upload to texture manager 0
+                    app_state->texture_manager(0).upload_frame(processed_frame);
+                }
 
                 if (app_state->texture_manager(0).get_texture_id() != 0) {
                     ImVec2 window_size = ImGui::GetContentRegionAvail();
@@ -1169,50 +1359,339 @@ int main(int argc, char* argv[]) {
                     ImGui::Image((void*)(intptr_t)app_state->texture_manager(0).get_texture_id(),
                                ImVec2(display_width, display_height));
                 } else {
-                    ImGui::Text("Waiting for camera 0 frames...");
+                    ImGui::Text("Waiting for camera frames...");
                 }
             }
             ImGui::End();
-        }
 
-        // Camera 1 (Right)
-        if (num_cameras > 1) {
-            ImGui::SetNextWindowPos(ImVec2(single_cam_width + 2 * cam_spacing, cam_spacing), ImGuiCond_FirstUseEver);
-            ImGui::SetNextWindowSize(ImVec2(single_cam_width, single_cam_height), ImGuiCond_FirstUseEver);
+            // Update settings_top for combined view
+            settings_top = combined_height + 20.0f;
 
-            if (ImGui::Begin("Camera 1")) {
-                upload_frame_to_gpu(1);
+        } else {
+            // === SEPARATE VIEW MODE: Two camera windows side-by-side ===
 
-                if (app_state->texture_manager(1).get_texture_id() != 0) {
-                    ImVec2 window_size = ImGui::GetContentRegionAvail();
+            // Camera 0 (Left)
+            if (num_cameras > 0) {
+                ImGui::SetNextWindowPos(ImVec2(cam_spacing, cam_spacing), ImGuiCond_FirstUseEver);
+                ImGui::SetNextWindowSize(ImVec2(single_cam_width, single_cam_height), ImGuiCond_FirstUseEver);
 
-                    // Maintain aspect ratio
-                    float aspect = static_cast<float>(app_state->texture_manager(1).get_width()) / app_state->texture_manager(1).get_height();
-                    float display_width = window_size.x;
-                    float display_height = display_width / aspect;
+                if (ImGui::Begin("Camera 0")) {
+                    upload_frame_to_gpu(0);
 
-                    if (display_height > window_size.y) {
-                        display_height = window_size.y;
-                        display_width = display_height * aspect;
+                    if (app_state->texture_manager(0).get_texture_id() != 0) {
+                        ImVec2 window_size = ImGui::GetContentRegionAvail();
+
+                        // Maintain aspect ratio
+                        float aspect = static_cast<float>(app_state->texture_manager(0).get_width()) / app_state->texture_manager(0).get_height();
+                        float display_width = window_size.x;
+                        float display_height = display_width / aspect;
+
+                        if (display_height > window_size.y) {
+                            display_height = window_size.y;
+                            display_width = display_height * aspect;
+                        }
+
+                        ImGui::Image((void*)(intptr_t)app_state->texture_manager(0).get_texture_id(),
+                                   ImVec2(display_width, display_height));
+                    } else {
+                        ImGui::Text("Waiting for camera 0 frames...");
                     }
-
-                    ImGui::Image((void*)(intptr_t)app_state->texture_manager(1).get_texture_id(),
-                               ImVec2(display_width, display_height));
-                } else {
-                    ImGui::Text("Waiting for camera 1 frames...");
                 }
+                ImGui::End();
             }
-            ImGui::End();
+
+            // Camera 1 (Right)
+            if (num_cameras > 1) {
+                ImGui::SetNextWindowPos(ImVec2(single_cam_width + 2 * cam_spacing, cam_spacing), ImGuiCond_FirstUseEver);
+                ImGui::SetNextWindowSize(ImVec2(single_cam_width, single_cam_height), ImGuiCond_FirstUseEver);
+
+                if (ImGui::Begin("Camera 1")) {
+                    upload_frame_to_gpu(1);
+
+                    if (app_state->texture_manager(1).get_texture_id() != 0) {
+                        ImVec2 window_size = ImGui::GetContentRegionAvail();
+
+                        // Maintain aspect ratio
+                        float aspect = static_cast<float>(app_state->texture_manager(1).get_width()) / app_state->texture_manager(1).get_height();
+                        float display_width = window_size.x;
+                        float display_height = display_width / aspect;
+
+                        if (display_height > window_size.y) {
+                            display_height = window_size.y;
+                            display_width = display_height * aspect;
+                        }
+
+                        ImGui::Image((void*)(intptr_t)app_state->texture_manager(1).get_texture_id(),
+                                   ImVec2(display_width, display_height));
+                    } else {
+                        ImGui::Text("Waiting for camera 1 frames...");
+                    }
+                }
+                ImGui::End();
+            }
         }
 
         // === Settings strips below cameras ===
         float settings_height = window_height - settings_top - 10.0f;
-        float strip_width = (window_width - 4 * cam_spacing) / 3.0f;  // 3 strips
+        float strip_width = (window_width - 5 * cam_spacing) / 4.0f;  // 4 strips
 
-        // Strip 1: Connection & Biases
+        // Strip 1: Analog Biases
         ImGui::SetNextWindowPos(ImVec2(cam_spacing, settings_top), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(ImVec2(strip_width, settings_height), ImGuiCond_FirstUseEver);
-        if (ImGui::Begin("Controls & Biases")) {
+        if (ImGui::Begin("Analog Biases")) {
+            settings_panel.render_bias_controls();
+        }
+        ImGui::End();
+
+        // Strip 2: Digital Filters
+        ImGui::SetNextWindowPos(ImVec2(strip_width + 2 * cam_spacing, settings_top), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(strip_width, settings_height), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Digital Filters")) {
+            settings_panel.render_digital_features();
+
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            settings_panel.render_frame_generation();
+        }
+        ImGui::End();
+
+        // Strip 3: Genetic Optimization
+        ImGui::SetNextWindowPos(ImVec2(2 * strip_width + 3 * cam_spacing, settings_top), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(strip_width, settings_height), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Genetic Optimization")) {
+
+            auto& ga_cfg = config.ga_settings();
+
+            if (!ga_state.running) {
+                ImGui::Text("Optimization Parameters");
+                ImGui::Separator();
+
+                // Row 1: Population Size | Generations
+                ImGui::PushItemWidth(100);
+                if (ImGui::InputInt("Population Size", &ga_cfg.population_size)) {
+                    ga_cfg.population_size = std::max(4, ga_cfg.population_size);
+                }
+                ImGui::SameLine();
+                if (ImGui::InputInt("Generations", &ga_cfg.num_generations)) {
+                    ga_cfg.num_generations = std::max(1, ga_cfg.num_generations);
+                }
+                ImGui::PopItemWidth();
+
+                // Row 2: Mutation Rate | Crossover Rate
+                ImGui::PushItemWidth(100);
+                if (ImGui::InputFloat("Mutation Rate", &ga_cfg.mutation_rate, 0.01f, 0.1f, "%.2f")) {
+                    ga_cfg.mutation_rate = std::clamp(ga_cfg.mutation_rate, 0.0f, 1.0f);
+                }
+                ImGui::SameLine();
+                if (ImGui::InputFloat("Crossover Rate", &ga_cfg.crossover_rate, 0.01f, 0.1f, "%.2f")) {
+                    ga_cfg.crossover_rate = std::clamp(ga_cfg.crossover_rate, 0.0f, 1.0f);
+                }
+                ImGui::PopItemWidth();
+
+                // Row 3: Frames per Evaluation
+                ImGui::PushItemWidth(100);
+                if (ImGui::InputInt("Frames/Eval", &ga_cfg.frames_per_eval)) {
+                    ga_cfg.frames_per_eval = std::max(1, ga_cfg.frames_per_eval);
+                }
+                ImGui::PopItemWidth();
+
+                ImGui::Separator();
+                ImGui::Text("Parameters to Optimize:");
+
+                ImGui::Checkbox("bias_diff##ga_opt", &ga_cfg.optimize_bias_diff); ImGui::SameLine();
+                ImGui::Checkbox("bias_refr##ga_opt", &ga_cfg.optimize_bias_refr);
+                ImGui::Checkbox("bias_fo##ga_opt", &ga_cfg.optimize_bias_fo); ImGui::SameLine();
+                ImGui::Checkbox("bias_hpf##ga_opt", &ga_cfg.optimize_bias_hpf);
+                ImGui::Checkbox("accumulation##ga_opt", &ga_cfg.optimize_accumulation);
+                ImGui::Checkbox("trail_filter##ga_opt", &ga_cfg.optimize_trail_filter); ImGui::SameLine();
+                ImGui::Checkbox("antiflicker##ga_opt", &ga_cfg.optimize_antiflicker);
+                ImGui::Checkbox("erc##ga_opt", &ga_cfg.optimize_erc);
+
+                ImGui::Separator();
+
+                // Cluster filter settings
+                settings_panel.render_genetic_algorithm();
+
+                ImGui::Separator();
+
+                if (app_state->camera_state().is_connected()) {
+                    if (ImGui::Button("Start Optimization", ImVec2(-1, 0))) {
+                        std::cout << "\n=== Starting GA Optimization ===" << std::endl;
+
+                        // Stop any previous optimization
+                        if (ga_state.optimizer && ga_state.running) {
+                            ga_state.optimizer->stop();
+                            if (ga_state.optimizer_thread && ga_state.optimizer_thread->joinable()) {
+                                ga_state.optimizer_thread->join();
+                            }
+                        }
+
+                        // Reset GA state
+                        ga_state.running = true;
+                        ga_state.current_generation = 0;
+                        ga_state.best_fitness = 1e9f;
+
+                        // Setup optimizer parameters from config
+                        EventCameraGeneticOptimizer::OptimizerParams params;
+                        params.population_size = ga_cfg.population_size;
+                        params.num_generations = ga_cfg.num_generations;
+                        params.mutation_rate = ga_cfg.mutation_rate;
+                        params.crossover_rate = ga_cfg.crossover_rate;
+                        params.alpha = 2.0f;
+                        params.beta = 0.5f;
+                        params.gamma = 2.0f;
+                        params.minimum_event_pixels = 500;
+                        params.delta = 5.0f;
+
+                        // Get bias ranges from BiasManager
+                        EventCameraGeneticOptimizer::Genome::BiasRanges hw_ranges;
+                        const auto& bias_ranges = bias_manager.get_bias_ranges();
+                        if (!bias_ranges.empty()) {
+                            if (bias_ranges.count("bias_diff")) {
+                                hw_ranges.diff_min = bias_ranges.at("bias_diff").min;
+                                hw_ranges.diff_max = bias_ranges.at("bias_diff").max;
+                            }
+                            if (bias_ranges.count("bias_refr")) {
+                                hw_ranges.refr_min = bias_ranges.at("bias_refr").min;
+                                hw_ranges.refr_max = bias_ranges.at("bias_refr").max;
+                            }
+                            if (bias_ranges.count("bias_fo")) {
+                                hw_ranges.fo_min = bias_ranges.at("bias_fo").min;
+                                hw_ranges.fo_max = bias_ranges.at("bias_fo").max;
+                            }
+                            if (bias_ranges.count("bias_hpf")) {
+                                hw_ranges.hpf_min = bias_ranges.at("bias_hpf").min;
+                                hw_ranges.hpf_max = bias_ranges.at("bias_hpf").max;
+                            }
+                        }
+
+                        auto fitness_callback = [&config, &ga_cfg, hw_ranges](const EventCameraGeneticOptimizer::Genome& genome) {
+                            EventCameraGeneticOptimizer::Genome genome_copy = genome;
+                            genome_copy.set_ranges(hw_ranges);
+                            genome_copy.clamp();
+                            return evaluate_genome_fitness(genome_copy, config, ga_cfg.frames_per_eval);
+                        };
+
+                        auto progress_callback = [](int generation, float best_fitness,
+                                                   const EventCameraGeneticOptimizer::Genome& best_genome,
+                                                   const EventCameraGeneticOptimizer::FitnessResult& best_result) {
+                            ga_state.current_generation.store(generation);
+                            ga_state.best_fitness.store(best_fitness);
+                            {
+                                std::lock_guard<std::mutex> lock(ga_state.mutex);
+                                ga_state.best_genome = best_genome;
+                                ga_state.best_result = best_result;
+                            }
+                        };
+
+                        ga_state.optimizer = std::make_unique<EventCameraGeneticOptimizer>(
+                            params, fitness_callback, progress_callback);
+
+                        ga_state.optimizer_thread = std::make_unique<std::thread>([&]() {
+                            std::cout << "GA optimization thread started" << std::endl;
+                            EventCameraGeneticOptimizer::Genome best = ga_state.optimizer->optimize();
+                            {
+                                std::lock_guard<std::mutex> lock(ga_state.mutex);
+                                ga_state.best_genome = best;
+                                ga_state.best_fitness = ga_state.optimizer->get_best_fitness();
+                            }
+                            ga_state.running = false;
+                            std::cout << "GA optimization thread finished" << std::endl;
+                        });
+
+                        std::cout << "GA optimization started in background" << std::endl;
+                    }
+                } else {
+                    ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "Connect camera to start optimization");
+                }
+            } else {
+                // Show progress (while GA is running)
+                ImGui::Text("Optimization Running...");
+
+                int current_gen = ga_state.current_generation.load();
+                float progress = static_cast<float>(current_gen) / static_cast<float>(ga_cfg.num_generations);
+                ImGui::ProgressBar(progress, ImVec2(-1, 0));
+
+                ImGui::Text("Generation: %d / %d", current_gen, ga_cfg.num_generations);
+                ImGui::Text("Best Fitness: %.4f", ga_state.best_fitness.load());
+
+                if (ImGui::Button("Stop Optimization", ImVec2(-1, 0))) {
+                    std::cout << "Stopping GA optimization..." << std::endl;
+                    if (ga_state.optimizer) {
+                        ga_state.optimizer->stop();
+                    }
+                    // Wait for thread to finish before allowing restart
+                    if (ga_state.optimizer_thread && ga_state.optimizer_thread->joinable()) {
+                        ga_state.optimizer_thread->join();
+                    }
+                    ga_state.running = false;
+                    std::cout << "GA optimization stopped successfully" << std::endl;
+                }
+            }
+
+            ImGui::Separator();
+
+            // Display best results
+            if (ga_state.best_fitness < 1e9f) {
+                ImGui::Text("Best Results");
+                ImGui::Text("Fitness: %.4f", ga_state.best_fitness.load());
+                ImGui::Text("Contrast: %.2f", ga_state.best_result.contrast_score);
+                ImGui::Text("Noise: %.4f", ga_state.best_result.noise_metric);
+
+                if (!ga_state.running && app_state->camera_state().is_connected()) {
+                    if (ImGui::Button("Apply Best Parameters", ImVec2(-1, 0))) {
+                        EventCameraGeneticOptimizer::Genome clamped_genome = ga_state.best_genome;
+
+                        EventCameraGeneticOptimizer::Genome::BiasRanges hw_ranges;
+                        const auto& bias_ranges = bias_manager.get_bias_ranges();
+                        if (!bias_ranges.empty()) {
+                            if (bias_ranges.count("bias_diff")) {
+                                hw_ranges.diff_min = bias_ranges.at("bias_diff").min;
+                                hw_ranges.diff_max = bias_ranges.at("bias_diff").max;
+                            }
+                            if (bias_ranges.count("bias_refr")) {
+                                hw_ranges.refr_min = bias_ranges.at("bias_refr").min;
+                                hw_ranges.refr_max = bias_ranges.at("bias_refr").max;
+                            }
+                            if (bias_ranges.count("bias_fo")) {
+                                hw_ranges.fo_min = bias_ranges.at("bias_fo").min;
+                                hw_ranges.fo_max = bias_ranges.at("bias_fo").max;
+                            }
+                            if (bias_ranges.count("bias_hpf")) {
+                                hw_ranges.hpf_min = bias_ranges.at("bias_hpf").min;
+                                hw_ranges.hpf_max = bias_ranges.at("bias_hpf").max;
+                            }
+                        }
+                        clamped_genome.set_ranges(hw_ranges);
+                        clamped_genome.clamp();
+
+                        config.camera_settings().bias_diff = clamped_genome.bias_diff;
+                        config.camera_settings().bias_refr = clamped_genome.bias_refr;
+                        config.camera_settings().bias_fo = clamped_genome.bias_fo;
+                        config.camera_settings().bias_hpf = clamped_genome.bias_hpf;
+                        config.camera_settings().accumulation_time_s = clamped_genome.accumulation_time_s;
+
+                        int num_cameras = app_state->camera_state().num_cameras();
+                        for (int i = 0; i < num_cameras; ++i) {
+                            auto& cam_info = app_state->camera_state().camera_manager()->get_camera(i);
+                            apply_bias_settings(*cam_info.camera, config.camera_settings());
+                        }
+
+                        std::cout << "Applied best GA parameters to all cameras (clamped to hardware limits)" << std::endl;
+                    }
+                }
+            } else {
+                ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "No optimization results yet");
+            }
+        }
+        ImGui::End();
+
+        // Strip 4: Controls
+        ImGui::SetNextWindowPos(ImVec2(3 * strip_width + 4 * cam_spacing, settings_top), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(strip_width, settings_height), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Controls")) {
             // Connection buttons
             if (app_state->camera_state().is_connected()) {
                 if (ImGui::Button("Disconnect & Reconnect", ImVec2(-1, 0))) {
@@ -1236,44 +1715,9 @@ int main(int argc, char* argv[]) {
 
             ImGui::Spacing();
             ImGui::Separator();
-
-            if (ImGui::CollapsingHeader("Analog Biases", ImGuiTreeNodeFlags_DefaultOpen)) {
-                settings_panel.render_bias_controls();
-            }
-        }
-        ImGui::End();
-
-        // Strip 2: Digital Features & Display
-        ImGui::SetNextWindowPos(ImVec2(strip_width + 2 * cam_spacing, settings_top), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(strip_width, settings_height), ImGuiCond_FirstUseEver);
-        if (ImGui::Begin("Features & Display")) {
-            if (ImGui::CollapsingHeader("Digital Features", ImGuiTreeNodeFlags_DefaultOpen)) {
-                settings_panel.render_digital_features();
-            }
-
             ImGui::Spacing();
-            ImGui::Separator();
 
-            if (ImGui::CollapsingHeader("Display Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
-                settings_panel.render_display_settings();
-            }
-        }
-        ImGui::End();
-
-        // Strip 3: Frame Gen & Genetic Algorithm
-        ImGui::SetNextWindowPos(ImVec2(2 * strip_width + 3 * cam_spacing, settings_top), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(strip_width, settings_height), ImGuiCond_FirstUseEver);
-        if (ImGui::Begin("Generation & Optimization")) {
-            if (ImGui::CollapsingHeader("Frame Generation", ImGuiTreeNodeFlags_DefaultOpen)) {
-                settings_panel.render_frame_generation();
-            }
-
-            ImGui::Spacing();
-            ImGui::Separator();
-
-            if (ImGui::CollapsingHeader("Genetic Algorithm Optimization")) {
-                settings_panel.render_genetic_algorithm();
-            }
+            settings_panel.render_display_settings();
 
             ImGui::Spacing();
             ImGui::Separator();

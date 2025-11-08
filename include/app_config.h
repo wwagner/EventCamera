@@ -253,10 +253,12 @@ public:
         bool optimize_antiflicker = false;
         bool optimize_erc = false;
 
-        // Cluster-based fitness evaluation
-        bool enable_cluster_filter = false; // Enable cluster-based evaluation
-        int cluster_radius = 25;            // Radius of circular clusters (pixels)
-        std::vector<std::pair<int, int>> cluster_centers; // Cluster center positions (x, y)
+        // Connected component fitness evaluation
+        bool enable_cluster_filter = false; // Enable connected component evaluation
+        int cluster_radius = 2;             // Target radius for connected components (pixels, 1-50)
+        int min_cluster_radius = 2;         // Minimum radius for noise filtering (pixels, 1-5)
+        bool use_processed_pixels = false;  // Apply display processing (grayscale + binary threshold) before fitness evaluation
+        std::vector<std::pair<int, int>> cluster_centers; // DEPRECATED: No longer used with connected components
     };
 
     // Runtime performance and timing constants

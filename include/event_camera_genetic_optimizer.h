@@ -84,6 +84,7 @@ public:
         float event_rate_avg;       // Average event rate (kev/s)
         float event_rate_std;       // Event rate stability
         float isolated_pixel_ratio; // Ratio of isolated pixels (bad noise)
+        float cluster_fill_metric;  // Cluster fill quality (0.0 = perfect fill, 1.0 = many gaps)
         int total_event_pixels;     // Total number of bright pixels (events)
 
         FitnessResult() : contrast_score(0.0f), noise_metric(1e6f),
@@ -91,7 +92,8 @@ public:
                          total_frames(0), temporal_variance(1e6f),
                          spatial_noise(1e6f), mean_brightness(0.0f),
                          event_rate_avg(0.0f), event_rate_std(1e6f),
-                         isolated_pixel_ratio(1e6f), total_event_pixels(0) {}
+                         isolated_pixel_ratio(1e6f), cluster_fill_metric(1e6f),
+                         total_event_pixels(0) {}
     };
 
     /**
@@ -126,6 +128,7 @@ public:
         float alpha = 1.0f;                 // Weight for contrast (want high contrast)
         float beta = 0.5f;                  // Weight for noise (want low noise)
         float gamma = 2.0f;                 // Weight for isolated pixels (want clusters, not noise)
+        float epsilon = 3.0f;               // Weight for cluster fill (want bridging pixels, no gaps)
 
         // Event count constraint
         int minimum_event_pixels = 500;     // Minimum bright pixels required (23 dots × ~25-50 px each)
@@ -215,20 +218,44 @@ public:
     /**
      * Calculate ratio of isolated pixels (single-pixel noise) vs clustered pixels
      * Returns value between 0.0 (all clustered) and 1.0 (all isolated)
+     * @param frame Input frame
+     * @param min_cluster_radius Minimum radius for cluster detection (default 2 pixels)
      */
-    static float calculate_isolated_pixels(const cv::Mat& frame);
+    static float calculate_isolated_pixels(const cv::Mat& frame, int min_cluster_radius = 2);
 
     /**
-     * Calculate cluster-based fitness metric
+     * Calculate cluster fill metric - measures how well pixels bridge together
+     * Returns value between 0.0 (perfect fill, no gaps) and 1.0 (many gaps)
+     * @param frame Input frame
+     * @param min_cluster_radius Minimum radius for cluster operations (default 2 pixels)
+     */
+    static float calculate_cluster_fill(const cv::Mat& frame, int min_cluster_radius = 2);
+
+    /**
+     * Calculate connected component fitness metric
+     * Finds connected pixel groups and evaluates how well they match target size
+     * @param frame Input frame
+     * @param target_radius Target radius for connected components (pixels)
+     * @param min_cluster_radius Minimum radius for noise filtering (default 2)
+     * @return Fitness value (lower is better): deviation from target + noise penalty
+     */
+    static float calculate_connected_component_fitness(const cv::Mat& frame,
+                                                        int target_radius,
+                                                        int min_cluster_radius = 2);
+
+    /**
+     * Calculate cluster-based fitness metric (DEPRECATED - use calculate_connected_component_fitness)
      * Evaluates events within defined circular clusters and penalizes noise outside
      * @param frame Input frame
      * @param cluster_centers Vector of (x,y) cluster center positions
      * @param cluster_radius Radius of each circular cluster
+     * @param min_cluster_radius Minimum radius for morphological operations
      * @return Fitness value (lower is better): ratio of events outside clusters + isolated pixel ratio
      */
     static float calculate_cluster_fitness(const cv::Mat& frame,
                                            const std::vector<std::pair<int, int>>& cluster_centers,
-                                           int cluster_radius);
+                                           int cluster_radius,
+                                           int min_cluster_radius = 2);
 
 private:
     OptimizerParams params_;
