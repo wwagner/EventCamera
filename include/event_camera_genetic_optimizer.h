@@ -27,8 +27,10 @@ public:
      * Parameter genome - encodes all optimizable event camera parameters
      */
     struct Genome {
-        // Camera Biases (4 params) - ranges will be set from actual hardware
-        int bias_diff;              // Event detection threshold
+        // Camera Biases (6 params) - ranges will be set from actual hardware
+        int bias_diff;              // Event detection threshold (global)
+        int bias_diff_on;           // ON event detection threshold
+        int bias_diff_off;          // OFF event detection threshold
         int bias_refr;              // Refractory period
         int bias_fo;                // Photoreceptor follower
         int bias_hpf;               // High-pass filter
@@ -52,6 +54,8 @@ public:
         // Bias ranges (set from camera hardware at runtime)
         struct BiasRanges {
             int diff_min = -25, diff_max = 23;
+            int diff_on_min = -25, diff_on_max = 23;
+            int diff_off_min = -25, diff_off_max = 23;
             int refr_min = -25, refr_max = 23;
             int fo_min = -25, fo_max = 23;
             int hpf_min = -25, hpf_max = 23;

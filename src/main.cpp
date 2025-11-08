@@ -278,6 +278,8 @@ void apply_bias_settings(Metavision::Camera& camera, const AppConfig::CameraSett
 
         // Apply all biases
         set_bias("bias_diff", settings.bias_diff);
+        set_bias("bias_diff_on", settings.bias_diff_on);
+        set_bias("bias_diff_off", settings.bias_diff_off);
         set_bias("bias_refr", settings.bias_refr);
         set_bias("bias_fo", settings.bias_fo);
         set_bias("bias_hpf", settings.bias_hpf);
@@ -314,6 +316,8 @@ EventCameraGeneticOptimizer::FitnessResult evaluate_genome_fitness(
         if (i_ll_biases) {
             try {
                 i_ll_biases->set("bias_diff", genome.bias_diff);
+                i_ll_biases->set("bias_diff_on", genome.bias_diff_on);
+                i_ll_biases->set("bias_diff_off", genome.bias_diff_off);
                 i_ll_biases->set("bias_refr", genome.bias_refr);
                 i_ll_biases->set("bias_fo", genome.bias_fo);
                 i_ll_biases->set("bias_hpf", genome.bias_hpf);
@@ -1331,6 +1335,8 @@ int main(int argc, char* argv[]) {
 
                         // Apply clamped values to config and camera
                         config.camera_settings().bias_diff = clamped_genome.bias_diff;
+                        config.camera_settings().bias_diff_on = clamped_genome.bias_diff_on;
+                        config.camera_settings().bias_diff_off = clamped_genome.bias_diff_off;
                         config.camera_settings().bias_refr = clamped_genome.bias_refr;
                         config.camera_settings().bias_fo = clamped_genome.bias_fo;
                         config.camera_settings().bias_hpf = clamped_genome.bias_hpf;
@@ -1710,6 +1716,8 @@ int main(int argc, char* argv[]) {
                         clamped_genome.clamp();
 
                         config.camera_settings().bias_diff = clamped_genome.bias_diff;
+                        config.camera_settings().bias_diff_on = clamped_genome.bias_diff_on;
+                        config.camera_settings().bias_diff_off = clamped_genome.bias_diff_off;
                         config.camera_settings().bias_refr = clamped_genome.bias_refr;
                         config.camera_settings().bias_fo = clamped_genome.bias_fo;
                         config.camera_settings().bias_hpf = clamped_genome.bias_hpf;

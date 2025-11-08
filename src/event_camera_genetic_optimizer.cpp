@@ -16,6 +16,8 @@ using namespace std;
 EventCameraGeneticOptimizer::Genome::Genome() {
     // Initialize with reasonable defaults
     bias_diff = 0;
+    bias_diff_on = 0;
+    bias_diff_off = 0;
     bias_refr = 0;
     bias_fo = 0;
     bias_hpf = 0;
@@ -32,11 +34,15 @@ EventCameraGeneticOptimizer::Genome::Genome() {
 void EventCameraGeneticOptimizer::Genome::randomize(mt19937& rng) {
     // Randomize camera biases
     uniform_int_distribution<int> diff_dist(ranges.diff_min, ranges.diff_max);
+    uniform_int_distribution<int> diff_on_dist(ranges.diff_on_min, ranges.diff_on_max);
+    uniform_int_distribution<int> diff_off_dist(ranges.diff_off_min, ranges.diff_off_max);
     uniform_int_distribution<int> refr_dist(ranges.refr_min, ranges.refr_max);
     uniform_int_distribution<int> fo_dist(ranges.fo_min, ranges.fo_max);
     uniform_int_distribution<int> hpf_dist(ranges.hpf_min, ranges.hpf_max);
 
     bias_diff = diff_dist(rng);
+    bias_diff_on = diff_on_dist(rng);
+    bias_diff_off = diff_off_dist(rng);
     bias_refr = refr_dist(rng);
     bias_fo = fo_dist(rng);
     bias_hpf = hpf_dist(rng);
@@ -68,6 +74,8 @@ void EventCameraGeneticOptimizer::Genome::randomize(mt19937& rng) {
 void EventCameraGeneticOptimizer::Genome::clamp() {
     // Clamp camera biases
     bias_diff = max(ranges.diff_min, min(ranges.diff_max, bias_diff));
+    bias_diff_on = max(ranges.diff_on_min, min(ranges.diff_on_max, bias_diff_on));
+    bias_diff_off = max(ranges.diff_off_min, min(ranges.diff_off_max, bias_diff_off));
     bias_refr = max(ranges.refr_min, min(ranges.refr_max, bias_refr));
     bias_fo = max(ranges.fo_min, min(ranges.fo_max, bias_fo));
     bias_hpf = max(ranges.hpf_min, min(ranges.hpf_max, bias_hpf));
@@ -378,6 +386,16 @@ void EventCameraGeneticOptimizer::mutate(Genome& genome) {
         genome.bias_diff += static_cast<int>(noise(rng_));
     }
     if (mutate_dist(rng_)) {
+        int range = genome.ranges.diff_on_max - genome.ranges.diff_on_min;
+        normal_distribution<float> noise(0.0f, params_.mutation_strength * range);
+        genome.bias_diff_on += static_cast<int>(noise(rng_));
+    }
+    if (mutate_dist(rng_)) {
+        int range = genome.ranges.diff_off_max - genome.ranges.diff_off_min;
+        normal_distribution<float> noise(0.0f, params_.mutation_strength * range);
+        genome.bias_diff_off += static_cast<int>(noise(rng_));
+    }
+    if (mutate_dist(rng_)) {
         int range = genome.ranges.refr_max - genome.ranges.refr_min;
         normal_distribution<float> noise(0.0f, params_.mutation_strength * range);
         genome.bias_refr += static_cast<int>(noise(rng_));
@@ -469,6 +487,8 @@ void EventCameraGeneticOptimizer::log_generation() {
 
     // Print best genome parameters
     cout << "  BEST:  diff=" << setw(3) << best_genome_.bias_diff
+         << " diff_on=" << setw(3) << best_genome_.bias_diff_on
+         << " diff_off=" << setw(3) << best_genome_.bias_diff_off
          << " refr=" << setw(3) << best_genome_.bias_refr
          << " fo=" << setw(3) << best_genome_.bias_fo
          << " hpf=" << setw(3) << best_genome_.bias_hpf
@@ -483,6 +503,8 @@ void EventCameraGeneticOptimizer::log_generation() {
 
     // Print worst genome parameters
     cout << "  WORST: diff=" << setw(3) << worst_genome.bias_diff
+         << " diff_on=" << setw(3) << worst_genome.bias_diff_on
+         << " diff_off=" << setw(3) << worst_genome.bias_diff_off
          << " refr=" << setw(3) << worst_genome.bias_refr
          << " fo=" << setw(3) << worst_genome.bias_fo
          << " hpf=" << setw(3) << worst_genome.bias_hpf
@@ -527,6 +549,8 @@ void EventCameraGeneticOptimizer::save_genome_to_ini(const Genome& genome,
 
     file << "[Camera]" << endl;
     file << "bias_diff = " << genome.bias_diff << endl;
+    file << "bias_diff_on = " << genome.bias_diff_on << endl;
+    file << "bias_diff_off = " << genome.bias_diff_off << endl;
     file << "bias_refr = " << genome.bias_refr << endl;
     file << "bias_fo = " << genome.bias_fo << endl;
     file << "bias_hpf = " << genome.bias_hpf << endl;
