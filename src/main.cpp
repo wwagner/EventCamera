@@ -485,27 +485,42 @@ EventCameraGeneticOptimizer::FitnessResult evaluate_genome_fitness(
             result.isolated_pixel_ratio = 0.0f;
             result.cluster_fill_metric = 1.0f;
         } else {
-            // Use connected component analysis to find and evaluate pixel groups
+            // Create mask for cluster regions (signal areas)
+            cv::Mat cluster_mask = cv::Mat::zeros(gray.size(), CV_8U);
+            int cluster_radius = config.ga_settings().cluster_radius;
+            for (const auto& center : config.ga_settings().cluster_centers) {
+                cv::Point pt(center.first, center.second);
+                cv::circle(cluster_mask, pt, cluster_radius, cv::Scalar(255), -1);
+            }
+
+            // Count pixels in cluster regions (signal) vs outside (noise)
+            cv::Mat pixels_in_clusters, pixels_outside_clusters;
+            cv::bitwise_and(binary, cluster_mask, pixels_in_clusters);
+            cv::bitwise_and(binary, ~cluster_mask, pixels_outside_clusters);
+
+            int signal_pixels = cv::countNonZero(pixels_in_clusters);
+            int noise_pixels = cv::countNonZero(pixels_outside_clusters);
+
+            // Contrast score: reward high signal in clusters
+            // Use connected component analysis for cluster quality
             float component_fitness = EventCameraGeneticOptimizer::calculate_connected_component_fitness(
                 captured_frames[0],
-                config.ga_settings().cluster_radius,  // Use as target radius
+                config.ga_settings().cluster_radius,
                 config.ga_settings().min_cluster_radius);
 
-            // Convert component fitness to contrast/noise metrics for consistency
-            // Lower component_fitness = better (more components meeting target)
-            // We want high contrast and low noise
+            result.contrast_score = std::max(0.1f, static_cast<float>(signal_pixels) / 10.0f);
 
-            // Invert for contrast (lower fitness = higher contrast)
-            result.contrast_score = std::max(0.1f, 100.0f - component_fitness);
+            // Noise metric: penalize ONLY pixels OUTSIDE cluster regions
+            // Higher noise_pixels = worse
+            result.noise_metric = static_cast<float>(noise_pixels) / 100.0f;
 
-            // Use fitness directly as noise (lower is better)
-            result.noise_metric = component_fitness;
-
-            // Calculate fill metric for additional quality assessment
+            // Calculate fill metric for cluster quality
             result.cluster_fill_metric = EventCameraGeneticOptimizer::calculate_cluster_fill(
                 captured_frames[0], config.ga_settings().min_cluster_radius);
 
-            result.isolated_pixel_ratio = 0.0f;  // Not used in connected component mode
+            // Isolated pixel ratio based on noise outside clusters
+            result.isolated_pixel_ratio = total_pixels > 0 ?
+                static_cast<float>(noise_pixels) / static_cast<float>(total_pixels) : 0.0f;
         }
 
     } else {

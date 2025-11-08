@@ -455,6 +455,47 @@ int EventCameraGeneticOptimizer::tournament_selection(int tournament_size) {
 void EventCameraGeneticOptimizer::log_generation() {
     FitnessResult best_result = evaluate_fitness(best_genome_);
 
+    // Find worst genome in current population
+    float worst_fitness = -1e9f;
+    int worst_idx = 0;
+    for (size_t i = 0; i < fitness_cache_.size(); ++i) {
+        if (fitness_cache_[i].combined_fitness > worst_fitness) {
+            worst_fitness = fitness_cache_[i].combined_fitness;
+            worst_idx = i;
+        }
+    }
+    const Genome& worst_genome = population_[worst_idx];
+    FitnessResult worst_result = fitness_cache_[worst_idx];
+
+    // Print best genome parameters
+    cout << "  BEST:  diff=" << setw(3) << best_genome_.bias_diff
+         << " refr=" << setw(3) << best_genome_.bias_refr
+         << " fo=" << setw(3) << best_genome_.bias_fo
+         << " hpf=" << setw(3) << best_genome_.bias_hpf
+         << " | accum=" << fixed << setprecision(4) << best_genome_.accumulation_time_s
+         << " | trail=" << (best_genome_.enable_trail_filter ? "ON " : "OFF")
+         << (best_genome_.enable_trail_filter ? ("(" + to_string(best_genome_.trail_threshold_us) + "us)") : "     ")
+         << " | af=" << (best_genome_.enable_antiflicker ? "ON " : "OFF")
+         << (best_genome_.enable_antiflicker ? ("(" + to_string(best_genome_.af_low_freq) + "-" + to_string(best_genome_.af_high_freq) + "Hz)") : "        ")
+         << " | erc=" << (best_genome_.enable_erc ? "ON " : "OFF")
+         << (best_genome_.enable_erc ? ("(" + to_string(best_genome_.erc_target_rate) + "k)") : "     ")
+         << endl;
+
+    // Print worst genome parameters
+    cout << "  WORST: diff=" << setw(3) << worst_genome.bias_diff
+         << " refr=" << setw(3) << worst_genome.bias_refr
+         << " fo=" << setw(3) << worst_genome.bias_fo
+         << " hpf=" << setw(3) << worst_genome.bias_hpf
+         << " | accum=" << fixed << setprecision(4) << worst_genome.accumulation_time_s
+         << " | trail=" << (worst_genome.enable_trail_filter ? "ON " : "OFF")
+         << (worst_genome.enable_trail_filter ? ("(" + to_string(worst_genome.trail_threshold_us) + "us)") : "     ")
+         << " | af=" << (worst_genome.enable_antiflicker ? "ON " : "OFF")
+         << (worst_genome.enable_antiflicker ? ("(" + to_string(worst_genome.af_low_freq) + "-" + to_string(worst_genome.af_high_freq) + "Hz)") : "        ")
+         << " | erc=" << (worst_genome.enable_erc ? "ON " : "OFF")
+         << (worst_genome.enable_erc ? ("(" + to_string(worst_genome.erc_target_rate) + "k)") : "     ")
+         << endl;
+
+    // Print generation summary
     cout << "Gen " << setw(4) << generation_
          << " | Fit: " << fixed << setprecision(6) << best_fitness_
          << " | Contrast: " << setprecision(2) << best_result.contrast_score
