@@ -245,6 +245,8 @@ public:
 
         // Parameters to optimize (0=fixed, 1=optimize)
         bool optimize_bias_diff = true;
+        bool optimize_bias_diff_on = true;
+        bool optimize_bias_diff_off = true;
         bool optimize_bias_refr = true;
         bool optimize_bias_fo = true;
         bool optimize_bias_hpf = true;

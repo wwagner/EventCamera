@@ -1147,6 +1147,8 @@ int main(int argc, char* argv[]) {
                 ImGui::Text("Parameters to Optimize:");
 
                 ImGui::Checkbox("bias_diff##ga_opt", &ga_cfg.optimize_bias_diff); ImGui::SameLine();
+                ImGui::Checkbox("bias_diff_on##ga_opt", &ga_cfg.optimize_bias_diff_on);
+                ImGui::Checkbox("bias_diff_off##ga_opt", &ga_cfg.optimize_bias_diff_off); ImGui::SameLine();
                 ImGui::Checkbox("bias_refr##ga_opt", &ga_cfg.optimize_bias_refr);
                 ImGui::Checkbox("bias_fo##ga_opt", &ga_cfg.optimize_bias_fo); ImGui::SameLine();
                 ImGui::Checkbox("bias_hpf##ga_opt", &ga_cfg.optimize_bias_hpf);
@@ -1549,6 +1551,8 @@ int main(int argc, char* argv[]) {
                 ImGui::Text("Parameters to Optimize:");
 
                 ImGui::Checkbox("bias_diff##ga_opt", &ga_cfg.optimize_bias_diff); ImGui::SameLine();
+                ImGui::Checkbox("bias_diff_on##ga_opt", &ga_cfg.optimize_bias_diff_on);
+                ImGui::Checkbox("bias_diff_off##ga_opt", &ga_cfg.optimize_bias_diff_off); ImGui::SameLine();
                 ImGui::Checkbox("bias_refr##ga_opt", &ga_cfg.optimize_bias_refr);
                 ImGui::Checkbox("bias_fo##ga_opt", &ga_cfg.optimize_bias_fo); ImGui::SameLine();
                 ImGui::Checkbox("bias_hpf##ga_opt", &ga_cfg.optimize_bias_hpf);
