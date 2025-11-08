@@ -15,6 +15,10 @@ bool BiasManager::initialize(Metavision::Camera& camera) {
         return false;
     }
 
+    // Add to list of all cameras to control
+    all_ll_biases_.clear();
+    all_ll_biases_.push_back(ll_biases_);
+
     // First, try to list ALL available biases from the camera
     std::cout << "\n=== BiasManager: Querying all available biases from camera ===" << std::endl;
 
@@ -46,6 +50,20 @@ bool BiasManager::initialize(Metavision::Camera& camera) {
     std::cout << "BiasManager: Initialized with " << bias_ranges_.size() << " supported biases" << std::endl;
     std::cout << "============================================================\n" << std::endl;
     return !bias_ranges_.empty();
+}
+
+bool BiasManager::add_camera(Metavision::Camera& camera) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    auto* camera_biases = camera.get_device().get_facility<Metavision::I_LL_Biases>();
+    if (!camera_biases) {
+        std::cerr << "BiasManager: Additional camera does not support bias control" << std::endl;
+        return false;
+    }
+
+    all_ll_biases_.push_back(camera_biases);
+    std::cout << "BiasManager: Added camera (now controlling " << all_ll_biases_.size() << " cameras)" << std::endl;
+    return true;
 }
 
 void BiasManager::setup_simulation_defaults() {
@@ -97,23 +115,30 @@ int BiasManager::get_bias(const std::string& name) const {
 void BiasManager::apply_to_camera() {
     std::lock_guard<std::mutex> lock(mutex_);
 
-    if (!ll_biases_) {
-        std::cout << "BiasManager: No camera connected, skipping bias application" << std::endl;
+    if (all_ll_biases_.empty()) {
+        std::cout << "BiasManager: No cameras connected, skipping bias application" << std::endl;
         return;
     }
 
-    std::cout << "BiasManager: Applying biases to camera..." << std::endl;
+    std::cout << "BiasManager: Applying biases to " << all_ll_biases_.size() << " camera(s)..." << std::endl;
 
-    for (const auto& [name, range] : bias_ranges_) {
-        try {
-            ll_biases_->set(name, range.current);
-            std::cout << "  " << name << "=" << range.current << std::endl;
-        } catch (const std::exception& e) {
-            std::cerr << "  Warning: Could not set " << name << ": " << e.what() << std::endl;
+    // Apply to all cameras
+    for (size_t cam_idx = 0; cam_idx < all_ll_biases_.size(); ++cam_idx) {
+        auto* camera_biases = all_ll_biases_[cam_idx];
+        if (!camera_biases) continue;
+
+        std::cout << "  Camera " << cam_idx << ":" << std::endl;
+        for (const auto& [name, range] : bias_ranges_) {
+            try {
+                camera_biases->set(name, range.current);
+                std::cout << "    " << name << "=" << range.current << std::endl;
+            } catch (const std::exception& e) {
+                std::cerr << "    Warning: Could not set " << name << ": " << e.what() << std::endl;
+            }
         }
     }
 
-    std::cout << "BiasManager: Biases applied successfully" << std::endl;
+    std::cout << "BiasManager: Biases applied successfully to all cameras" << std::endl;
 }
 
 void BiasManager::reset_to_defaults() {

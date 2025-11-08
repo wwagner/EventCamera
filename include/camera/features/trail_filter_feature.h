@@ -3,6 +3,7 @@
 
 #include "camera/hardware_feature.h"
 #include <metavision/hal/facilities/i_event_trail_filter_module.h>
+#include <vector>
 
 namespace EventCamera {
 
@@ -18,6 +19,7 @@ public:
 
     // IHardwareFeature interface
     bool initialize(Metavision::Camera& camera) override;
+    bool add_camera(Metavision::Camera& camera) override;
     void shutdown() override;
     bool is_available() const override { return trail_filter_ != nullptr; }
     bool is_enabled() const override { return enabled_; }
@@ -43,7 +45,8 @@ public:
     void set_threshold(uint32_t threshold_us);
 
 private:
-    Metavision::I_EventTrailFilterModule* trail_filter_ = nullptr;
+    Metavision::I_EventTrailFilterModule* trail_filter_ = nullptr;  // Primary camera for reading capabilities
+    std::vector<Metavision::I_EventTrailFilterModule*> all_trail_filters_;  // All cameras to control
     bool enabled_ = false;
     int filter_type_ = 0;  // 0=TRAIL, 1=STC_CUT_TRAIL, 2=STC_KEEP_TRAIL
     int threshold_us_ = 10000;

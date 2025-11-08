@@ -3,6 +3,7 @@
 
 #include <string>
 #include <map>
+#include <vector>
 #include <mutex>
 #include <metavision/hal/facilities/i_ll_biases.h>
 #include <metavision/sdk/driver/camera.h>
@@ -35,6 +36,13 @@ public:
      * @return true if initialization succeeded
      */
     bool initialize(Metavision::Camera& camera);
+
+    /**
+     * @brief Add an additional camera to be controlled
+     * @param camera Reference to the Metavision camera
+     * @return true if successful
+     */
+    bool add_camera(Metavision::Camera& camera);
 
     /**
      * @brief Get all available bias ranges
@@ -108,7 +116,8 @@ private:
      */
     float bias_to_slider(int bias, int min, int max) const;
 
-    Metavision::I_LL_Biases* ll_biases_ = nullptr;
+    Metavision::I_LL_Biases* ll_biases_ = nullptr;  // Primary camera for reading ranges
+    std::vector<Metavision::I_LL_Biases*> all_ll_biases_;  // All cameras to control
     std::map<std::string, BiasRange> bias_ranges_;
     std::map<std::string, float> slider_positions_;  // Track slider state for UI
     mutable std::mutex mutex_;

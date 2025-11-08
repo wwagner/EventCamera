@@ -259,6 +259,15 @@ public:
         std::vector<std::pair<int, int>> cluster_centers; // Cluster center positions (x, y)
     };
 
+    // Runtime performance and timing constants
+    struct RuntimeSettings {
+        int64_t max_event_age_us = 100000;          // Maximum event age before skipping (microseconds)
+        int ga_frame_capture_wait_ms = 20;          // Wait time between GA frame capture attempts (ms)
+        int ga_frame_capture_max_attempts = 10;     // Max attempts multiplier for GA frame capture
+        int ga_parameter_settle_ms = 200;           // Wait for parameters to stabilize (ms)
+        int simulation_frame_delay_ms = 33;         // Simulation mode frame delay (~30 FPS)
+    };
+
     AppConfig();
     ~AppConfig();
 
@@ -321,6 +330,9 @@ public:
     GeneticAlgorithmSettings& ga_settings() { return ga_settings_; }
     const GeneticAlgorithmSettings& ga_settings() const { return ga_settings_; }
 
+    RuntimeSettings& runtime_settings() { return runtime_settings_; }
+    const RuntimeSettings& runtime_settings() const { return runtime_settings_; }
+
 private:
     // Helper function to parse RGB color from "R, G, B" string
     cv::Scalar parse_rgb(const std::string& value);
@@ -343,4 +355,5 @@ private:
     RenderingTextSettings rendering_text_;
     AlgorithmSettings algorithm_settings_;
     GeneticAlgorithmSettings ga_settings_;
+    RuntimeSettings runtime_settings_;
 };

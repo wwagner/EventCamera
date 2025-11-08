@@ -12,6 +12,10 @@ bool AntiFlickerFeature::initialize(Metavision::Camera& camera) {
         return false;
     }
 
+    // Add to list of all cameras
+    all_antiflicker_.clear();
+    all_antiflicker_.push_back(antiflicker_);
+
     try {
         // Get reasonable defaults from hardware
         uint32_t min_freq = antiflicker_->get_min_supported_frequency();
@@ -30,6 +34,19 @@ bool AntiFlickerFeature::initialize(Metavision::Camera& camera) {
     return true;
 }
 
+bool AntiFlickerFeature::add_camera(Metavision::Camera& camera) {
+    auto* camera_antiflicker = camera.get_device().get_facility<Metavision::I_AntiFlickerModule>();
+
+    if (!camera_antiflicker) {
+        std::cerr << "AntiFlickerFeature: Additional camera does not support Anti-Flicker" << std::endl;
+        return false;
+    }
+
+    all_antiflicker_.push_back(camera_antiflicker);
+    std::cout << "AntiFlickerFeature: Added camera (now controlling " << all_antiflicker_.size() << " cameras)" << std::endl;
+    return true;
+}
+
 void AntiFlickerFeature::shutdown() {
     if (antiflicker_ && enabled_) {
         try {
@@ -37,44 +54,50 @@ void AntiFlickerFeature::shutdown() {
         } catch (...) {}
     }
     antiflicker_ = nullptr;
+    all_antiflicker_.clear();
     enabled_ = false;
 }
 
 void AntiFlickerFeature::enable(bool enabled) {
-    if (!antiflicker_) return;
+    if (all_antiflicker_.empty()) return;
 
     enabled_ = enabled;
 
-    try {
-        antiflicker_->enable(enabled_);
-        std::cout << "Anti-Flicker " << (enabled_ ? "enabled" : "disabled") << std::endl;
-    } catch (const std::exception& e) {
-        std::cerr << "AntiFlickerFeature: Failed to " << (enabled ? "enable" : "disable")
-                 << ": " << e.what() << std::endl;
+    std::cout << "Anti-Flicker " << (enabled_ ? "enabling" : "disabling")
+              << " on " << all_antiflicker_.size() << " camera(s)..." << std::endl;
+
+    for (size_t i = 0; i < all_antiflicker_.size(); ++i) {
+        try {
+            all_antiflicker_[i]->enable(enabled_);
+            std::cout << "  Camera " << i << ": " << (enabled_ ? "enabled" : "disabled") << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "  Camera " << i << ": Failed to " << (enabled ? "enable" : "disable")
+                     << ": " << e.what() << std::endl;
+        }
     }
 }
 
 void AntiFlickerFeature::apply_settings() {
-    if (!antiflicker_ || !enabled_) return;
+    if (all_antiflicker_.empty() || !enabled_) return;
 
-    try {
-        // Apply filtering mode
-        auto mode = (mode_ == 0) ?
-            Metavision::I_AntiFlickerModule::BAND_STOP :
-            Metavision::I_AntiFlickerModule::BAND_PASS;
-        antiflicker_->set_filtering_mode(mode);
+    // Determine filtering mode
+    auto mode = (mode_ == 0) ?
+        Metavision::I_AntiFlickerModule::BAND_STOP :
+        Metavision::I_AntiFlickerModule::BAND_PASS;
 
-        // Apply frequency band
-        antiflicker_->set_frequency_band(low_freq_, high_freq_);
+    std::cout << "Anti-Flicker applying settings to " << all_antiflicker_.size() << " camera(s)..." << std::endl;
 
-        // Apply duty cycle
-        antiflicker_->set_duty_cycle(duty_cycle_);
-
-        std::cout << "Anti-Flicker settings applied: mode=" << mode_
-                 << " freq=[" << low_freq_ << "," << high_freq_ << "]Hz"
-                 << " duty=" << duty_cycle_ << "%" << std::endl;
-    } catch (const std::exception& e) {
-        std::cerr << "AntiFlickerFeature: Failed to apply settings: " << e.what() << std::endl;
+    for (size_t i = 0; i < all_antiflicker_.size(); ++i) {
+        try {
+            all_antiflicker_[i]->set_filtering_mode(mode);
+            all_antiflicker_[i]->set_frequency_band(low_freq_, high_freq_);
+            all_antiflicker_[i]->set_duty_cycle(duty_cycle_);
+            std::cout << "  Camera " << i << ": mode=" << mode_
+                     << " freq=[" << low_freq_ << "," << high_freq_ << "]Hz"
+                     << " duty=" << duty_cycle_ << "%" << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "  Camera " << i << ": Failed to apply settings: " << e.what() << std::endl;
+        }
     }
 }
 

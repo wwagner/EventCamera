@@ -190,6 +190,12 @@ void SettingsPanel::render_bias_controls() {
         return std::pow(normalized, 1.0f / 2.5f) * 100.0f;
     };
 
+    // Helper lambda to apply bias change immediately to all cameras
+    auto apply_bias_immediately = [&](const std::string& name, int value) {
+        bias_mgr_.set_bias(name, value);
+        bias_mgr_.apply_to_camera();
+    };
+
     // Static variables to track slider positions (initialized once)
     static float slider_diff = 50.0f;
     static float slider_diff_on = 50.0f;
@@ -216,12 +222,12 @@ void SettingsPanel::render_bias_controls() {
         sliders_initialized = true;
     }
 
-    // Exponentially-scaled bias sliders with input boxes
+    // Exponentially-scaled bias sliders with input boxes (apply immediately)
     if (bias_ranges.count("bias_diff")) {
         const auto& range = bias_ranges.at("bias_diff");
         if (ImGui::SliderFloat("bias_diff", &slider_diff, 0.0f, 100.0f, "%.0f%%")) {
             cam_settings.bias_diff = exp_to_bias(slider_diff, range.min, range.max);
-            settings_changed_ = true;
+            apply_bias_immediately("bias_diff", cam_settings.bias_diff);
         }
         ImGui::SameLine();
         ImGui::SetNextItemWidth(80);
@@ -230,7 +236,7 @@ void SettingsPanel::render_bias_controls() {
             temp_diff = std::clamp(temp_diff, range.min, range.max);
             cam_settings.bias_diff = temp_diff;
             slider_diff = bias_to_exp(temp_diff, range.min, range.max);
-            settings_changed_ = true;
+            apply_bias_immediately("bias_diff", cam_settings.bias_diff);
         }
         ImGui::TextWrapped("Event threshold: %d [%d to %d] (exponential scale)",
                            cam_settings.bias_diff, range.min, range.max);
@@ -241,7 +247,7 @@ void SettingsPanel::render_bias_controls() {
         const auto& range = bias_ranges.at("bias_diff_on");
         if (ImGui::SliderFloat("bias_diff_on", &slider_diff_on, 0.0f, 100.0f, "%.0f%%")) {
             cam_settings.bias_diff_on = exp_to_bias(slider_diff_on, range.min, range.max);
-            settings_changed_ = true;
+            apply_bias_immediately("bias_diff_on", cam_settings.bias_diff_on);
         }
         ImGui::SameLine();
         ImGui::SetNextItemWidth(80);
@@ -250,7 +256,7 @@ void SettingsPanel::render_bias_controls() {
             temp_diff_on = std::clamp(temp_diff_on, range.min, range.max);
             cam_settings.bias_diff_on = temp_diff_on;
             slider_diff_on = bias_to_exp(temp_diff_on, range.min, range.max);
-            settings_changed_ = true;
+            apply_bias_immediately("bias_diff_on", cam_settings.bias_diff_on);
         }
         ImGui::TextWrapped("ON threshold: %d [%d to %d] (exponential scale)",
                            cam_settings.bias_diff_on, range.min, range.max);
@@ -261,7 +267,7 @@ void SettingsPanel::render_bias_controls() {
         const auto& range = bias_ranges.at("bias_diff_off");
         if (ImGui::SliderFloat("bias_diff_off", &slider_diff_off, 0.0f, 100.0f, "%.0f%%")) {
             cam_settings.bias_diff_off = exp_to_bias(slider_diff_off, range.min, range.max);
-            settings_changed_ = true;
+            apply_bias_immediately("bias_diff_off", cam_settings.bias_diff_off);
         }
         ImGui::SameLine();
         ImGui::SetNextItemWidth(80);
@@ -270,7 +276,7 @@ void SettingsPanel::render_bias_controls() {
             temp_diff_off = std::clamp(temp_diff_off, range.min, range.max);
             cam_settings.bias_diff_off = temp_diff_off;
             slider_diff_off = bias_to_exp(temp_diff_off, range.min, range.max);
-            settings_changed_ = true;
+            apply_bias_immediately("bias_diff_off", cam_settings.bias_diff_off);
         }
         ImGui::TextWrapped("OFF threshold: %d [%d to %d] (exponential scale)",
                            cam_settings.bias_diff_off, range.min, range.max);
@@ -281,7 +287,7 @@ void SettingsPanel::render_bias_controls() {
         const auto& range = bias_ranges.at("bias_refr");
         if (ImGui::SliderFloat("bias_refr", &slider_refr, 0.0f, 100.0f, "%.0f%%")) {
             cam_settings.bias_refr = exp_to_bias(slider_refr, range.min, range.max);
-            settings_changed_ = true;
+            apply_bias_immediately("bias_refr", cam_settings.bias_refr);
         }
         ImGui::SameLine();
         ImGui::SetNextItemWidth(80);
@@ -290,7 +296,7 @@ void SettingsPanel::render_bias_controls() {
             temp_refr = std::clamp(temp_refr, range.min, range.max);
             cam_settings.bias_refr = temp_refr;
             slider_refr = bias_to_exp(temp_refr, range.min, range.max);
-            settings_changed_ = true;
+            apply_bias_immediately("bias_refr", cam_settings.bias_refr);
         }
         ImGui::TextWrapped("Refractory: %d [%d to %d] (exponential scale)",
                            cam_settings.bias_refr, range.min, range.max);
@@ -301,7 +307,7 @@ void SettingsPanel::render_bias_controls() {
         const auto& range = bias_ranges.at("bias_fo");
         if (ImGui::SliderFloat("bias_fo", &slider_fo, 0.0f, 100.0f, "%.0f%%")) {
             cam_settings.bias_fo = exp_to_bias(slider_fo, range.min, range.max);
-            settings_changed_ = true;
+            apply_bias_immediately("bias_fo", cam_settings.bias_fo);
         }
         ImGui::SameLine();
         ImGui::SetNextItemWidth(80);
@@ -310,7 +316,7 @@ void SettingsPanel::render_bias_controls() {
             temp_fo = std::clamp(temp_fo, range.min, range.max);
             cam_settings.bias_fo = temp_fo;
             slider_fo = bias_to_exp(temp_fo, range.min, range.max);
-            settings_changed_ = true;
+            apply_bias_immediately("bias_fo", cam_settings.bias_fo);
         }
         ImGui::TextWrapped("Follower: %d [%d to %d] (exponential scale)",
                            cam_settings.bias_fo, range.min, range.max);
@@ -321,7 +327,7 @@ void SettingsPanel::render_bias_controls() {
         const auto& range = bias_ranges.at("bias_hpf");
         if (ImGui::SliderFloat("bias_hpf", &slider_hpf, 0.0f, 100.0f, "%.0f%%")) {
             cam_settings.bias_hpf = exp_to_bias(slider_hpf, range.min, range.max);
-            settings_changed_ = true;
+            apply_bias_immediately("bias_hpf", cam_settings.bias_hpf);
         }
         ImGui::SameLine();
         ImGui::SetNextItemWidth(80);
@@ -330,7 +336,7 @@ void SettingsPanel::render_bias_controls() {
             temp_hpf = std::clamp(temp_hpf, range.min, range.max);
             cam_settings.bias_hpf = temp_hpf;
             slider_hpf = bias_to_exp(temp_hpf, range.min, range.max);
-            settings_changed_ = true;
+            apply_bias_immediately("bias_hpf", cam_settings.bias_hpf);
         }
         ImGui::TextWrapped("High-pass: %d [%d to %d] (exponential scale)",
                            cam_settings.bias_hpf, range.min, range.max);
@@ -364,95 +370,43 @@ void SettingsPanel::render_frame_generation() {
     ImGui::Text("Frame Generation");
 
     auto& cam_settings = config_.camera_settings();
+    static float previous_accumulation = cam_settings.accumulation_time_s;
+    bool accumulation_changed = false;
 
+    // Mark restart-required settings in orange/yellow
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.2f, 1.0f));  // Orange/yellow color
     if (ImGui::SliderFloat("Accumulation (s)", &cam_settings.accumulation_time_s,
                           0.001f, 0.1f, "%.3f")) {
+        accumulation_changed = true;
         settings_changed_ = true;
     }
+    ImGui::PopStyleColor();
+
     ImGui::TextWrapped("Time to accumulate events (lower = more responsive)");
+
+    if (cam_settings.accumulation_time_s != previous_accumulation) {
+        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Need Restart - Reconnect camera to apply");
+    }
 }
 
 void SettingsPanel::render_apply_button() {
     ImGui::Spacing();
     ImGui::Separator();
 
-    if (settings_changed_) {
-        ImGui::TextColored(ImVec4(1, 1, 0, 1), "Settings changed!");
-
-        if (ImGui::Button("Apply Settings", ImVec2(-1, 0))) {
-            // Apply bias settings to ALL cameras
-            if (state_.camera_state().is_connected() && state_.camera_state().camera_manager()) {
-                int num_cameras = state_.camera_state().num_cameras();
-                std::cout << "Applying settings to all " << num_cameras << " camera(s)..." << std::endl;
-
-                for (int i = 0; i < num_cameras; ++i) {
-                    auto& cam_info = state_.camera_state().camera_manager()->get_camera(i);
-                    auto* ll_biases = cam_info.camera->get_device().get_facility<Metavision::I_LL_Biases>();
-
-                    if (ll_biases) {
-                        std::cout << "Applying biases to Camera " << i << "..." << std::endl;
-                        auto& cam_settings = config_.camera_settings();
-
-                        try { ll_biases->set("bias_diff", cam_settings.bias_diff); } catch (...) {}
-                        try { ll_biases->set("bias_diff_on", cam_settings.bias_diff_on); } catch (...) {}
-                        try { ll_biases->set("bias_diff_off", cam_settings.bias_diff_off); } catch (...) {}
-                        try { ll_biases->set("bias_refr", cam_settings.bias_refr); } catch (...) {}
-                        try { ll_biases->set("bias_fo", cam_settings.bias_fo); } catch (...) {}
-                        try { ll_biases->set("bias_hpf", cam_settings.bias_hpf); } catch (...) {}
-
-                        std::cout << "  Camera " << i << " biases applied" << std::endl;
-                    }
-                }
-
-                // Apply digital features to all cameras directly
-                std::cout << "Applying digital features to all cameras..." << std::endl;
-                apply_digital_features_to_all_cameras();
-            }
-
-            // Update frame generation note
-            auto& cam_settings = config_.camera_settings();
-            if (cam_settings.accumulation_time_s != previous_settings_.accumulation_time_s) {
-                std::cout << "Note: Frame accumulation time will take effect after reconnecting camera" << std::endl;
-                std::cout << "Config updated to " << cam_settings.accumulation_time_s << "s" << std::endl;
-            }
-
-            previous_settings_ = cam_settings;
-            settings_changed_ = false;
-        }
-    }
+    // Note: Most settings now apply immediately when changed
+    // Only accumulation time requires restart
 
     ImGui::Spacing();
 
     if (ImGui::Button("Reset to Defaults", ImVec2(-1, 0))) {
-        // Reset bias manager to get default values
+        // Reset bias manager and apply to all cameras immediately
         bias_mgr_.reset_to_defaults();
+        bias_mgr_.apply_to_camera();
 
-        // Apply default biases to ALL cameras
-        if (state_.camera_state().is_connected() && state_.camera_state().camera_manager()) {
-            int num_cameras = state_.camera_state().num_cameras();
-            std::cout << "Resetting biases to defaults on all " << num_cameras << " camera(s)..." << std::endl;
-
-            // Get default values from config after reset
-            auto& cam_settings = config_.camera_settings();
-
-            for (int i = 0; i < num_cameras; ++i) {
-                auto& cam_info = state_.camera_state().camera_manager()->get_camera(i);
-                auto* ll_biases = cam_info.camera->get_device().get_facility<Metavision::I_LL_Biases>();
-
-                if (ll_biases) {
-                    std::cout << "Resetting Camera " << i << " to defaults..." << std::endl;
-                    try { ll_biases->set("bias_diff", cam_settings.bias_diff); } catch (...) {}
-                    try { ll_biases->set("bias_diff_on", cam_settings.bias_diff_on); } catch (...) {}
-                    try { ll_biases->set("bias_diff_off", cam_settings.bias_diff_off); } catch (...) {}
-                    try { ll_biases->set("bias_refr", cam_settings.bias_refr); } catch (...) {}
-                    try { ll_biases->set("bias_fo", cam_settings.bias_fo); } catch (...) {}
-                    try { ll_biases->set("bias_hpf", cam_settings.bias_hpf); } catch (...) {}
-                }
-            }
-        }
-
+        // Reset accumulation time (requires restart to take effect)
         config_.camera_settings().accumulation_time_s = 0.01f;
-        settings_changed_ = true;
+
+        std::cout << "All settings reset to defaults" << std::endl;
     }
 }
 

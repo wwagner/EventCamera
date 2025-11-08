@@ -26,6 +26,7 @@ public:
 
     // IHardwareFeature interface
     bool initialize(Metavision::Camera& camera) override;
+    bool add_camera(Metavision::Camera& camera) override;
     void shutdown() override;
     bool is_available() const override { return roi_ != nullptr; }
     bool is_enabled() const override { return enabled_; }
@@ -56,7 +57,8 @@ public:
     void set_crop_view(bool crop) { crop_view_ = crop; }
 
 private:
-    Metavision::I_ROI* roi_ = nullptr;
+    Metavision::I_ROI* roi_ = nullptr;  // Primary camera
+    std::vector<Metavision::I_ROI*> all_roi_;  // All cameras to control
     std::shared_ptr<video::ROIFilter> roi_filter_;
     core::DisplaySettings& display_settings_;
 

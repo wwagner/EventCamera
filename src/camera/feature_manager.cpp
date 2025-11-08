@@ -30,6 +30,31 @@ void FeatureManager::initialize_all(Metavision::Camera& camera) {
     }
 }
 
+bool FeatureManager::add_camera(Metavision::Camera& camera) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::cout << "Adding camera to all features..." << std::endl;
+
+    bool all_success = true;
+    for (auto& feature : features_) {
+        if (feature->is_available()) {
+            try {
+                bool success = feature->add_camera(camera);
+                if (success) {
+                    std::cout << "  ✓ " << feature->name() << " - camera added" << std::endl;
+                } else {
+                    std::cout << "  ✗ " << feature->name() << " - failed to add camera" << std::endl;
+                    all_success = false;
+                }
+            } catch (const std::exception& e) {
+                std::cerr << "  ✗ " << feature->name() << " - error: " << e.what() << std::endl;
+                all_success = false;
+            }
+        }
+    }
+
+    return all_success;
+}
+
 void FeatureManager::shutdown_all() {
     std::lock_guard<std::mutex> lock(mutex_);
     std::cout << "Shutting down features..." << std::endl;

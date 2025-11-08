@@ -117,33 +117,21 @@ void apply_bias_settings(Metavision::Camera& camera, const AppConfig::CameraSett
     if (i_ll_biases) {
         std::cout << "Applying camera biases..." << std::endl;
 
-        try {
-            i_ll_biases->set("bias_diff", settings.bias_diff);
-            std::cout << "  bias_diff=" << settings.bias_diff << std::endl;
-        } catch (const std::exception& e) {
-            std::cerr << "  Warning: Could not set bias_diff: " << e.what() << std::endl;
-        }
+        // Helper to set a bias with error handling
+        auto set_bias = [&](const char* name, int value) {
+            try {
+                i_ll_biases->set(name, value);
+                std::cout << "  " << name << "=" << value << std::endl;
+            } catch (const std::exception& e) {
+                std::cerr << "  Warning: Could not set " << name << ": " << e.what() << std::endl;
+            }
+        };
 
-        try {
-            i_ll_biases->set("bias_refr", settings.bias_refr);
-            std::cout << "  bias_refr=" << settings.bias_refr << std::endl;
-        } catch (const std::exception& e) {
-            std::cerr << "  Warning: Could not set bias_refr: " << e.what() << std::endl;
-        }
-
-        try {
-            i_ll_biases->set("bias_fo", settings.bias_fo);
-            std::cout << "  bias_fo=" << settings.bias_fo << std::endl;
-        } catch (const std::exception& e) {
-            std::cerr << "  Warning: Could not set bias_fo: " << e.what() << std::endl;
-        }
-
-        try {
-            i_ll_biases->set("bias_hpf", settings.bias_hpf);
-            std::cout << "  bias_hpf=" << settings.bias_hpf << std::endl;
-        } catch (const std::exception& e) {
-            std::cerr << "  Warning: Could not set bias_hpf: " << e.what() << std::endl;
-        }
+        // Apply all biases
+        set_bias("bias_diff", settings.bias_diff);
+        set_bias("bias_refr", settings.bias_refr);
+        set_bias("bias_fo", settings.bias_fo);
+        set_bias("bias_hpf", settings.bias_hpf);
 
         std::cout << "Camera biases applied successfully" << std::endl;
     }
@@ -246,7 +234,7 @@ EventCameraGeneticOptimizer::FitnessResult evaluate_genome_fitness(
     }
     
     // Wait for parameters to stabilize
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    std::this_thread::sleep_for(std::chrono::milliseconds(config.runtime_settings().ga_parameter_settle_ms));
 
     // Enable GA frame capture
     ga_state.capturing_for_ga = true;
@@ -255,7 +243,7 @@ EventCameraGeneticOptimizer::FitnessResult evaluate_genome_fitness(
     std::vector<cv::Mat> captured_frames;
     captured_frames.reserve(num_frames);
 
-    int max_attempts = num_frames * 10;  // Try 10x as many times
+    int max_attempts = num_frames * config.runtime_settings().ga_frame_capture_max_attempts;
     int attempts = 0;
 
     while (captured_frames.size() < static_cast<size_t>(num_frames) && attempts < max_attempts) {
@@ -264,7 +252,7 @@ EventCameraGeneticOptimizer::FitnessResult evaluate_genome_fitness(
             captured_frames.push_back(frame_opt.value());
         }
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));  // Wait between attempts
+        std::this_thread::sleep_for(std::chrono::milliseconds(config.runtime_settings().ga_frame_capture_wait_ms));
         attempts++;
     }
 
@@ -435,11 +423,19 @@ bool try_connect_camera(AppConfig& config, EventCamera::BiasManager& bias_mgr,
     auto& cam_info = app_state->camera_state().camera_manager()->get_camera(0);
     app_state->display_settings().set_image_size(cam_info.width, cam_info.height);
 
-    // Initialize BiasManager with newly connected camera
+    // Initialize BiasManager with all cameras
     if (bias_mgr.initialize(*cam_info.camera)) {
-        std::cout << "BiasManager initialized with new camera" << std::endl;
+        std::cout << "BiasManager initialized with Camera 0" << std::endl;
+
+        // Add additional cameras to BiasManager
+        for (int i = 1; i < num_cameras; ++i) {
+            auto& additional_cam = app_state->camera_state().camera_manager()->get_camera(i);
+            if (bias_mgr.add_camera(*additional_cam.camera)) {
+                std::cout << "BiasManager: Added Camera " << i << std::endl;
+            }
+        }
     } else {
-        std::cerr << "Warning: Failed to initialize BiasManager with new camera" << std::endl;
+        std::cerr << "Warning: Failed to initialize BiasManager" << std::endl;
     }
 
     // Register and initialize hardware features (using Camera 0 for UI)
@@ -450,9 +446,24 @@ bool try_connect_camera(AppConfig& config, EventCamera::BiasManager& bias_mgr,
     app_state->feature_manager().register_feature(std::make_shared<EventCamera::ROIFeature>(app_state->roi_filter(), app_state->display_settings()));
     app_state->feature_manager().register_feature(std::make_shared<EventCamera::MonitoringFeature>());
 
-    // Initialize features on Camera 0 only (for UI display)
+    // Initialize features on Camera 0
     app_state->feature_manager().initialize_all(*cam_info.camera);
-    std::cout << "Hardware features initialized (using Camera 0 for UI)\n" << std::endl;
+
+    // Add additional cameras to FeatureManager
+    for (int i = 1; i < num_cameras; ++i) {
+        auto& additional_cam = app_state->camera_state().camera_manager()->get_camera(i);
+        if (app_state->feature_manager().add_camera(*additional_cam.camera)) {
+            std::cout << "FeatureManager: Added Camera " << i << std::endl;
+        }
+    }
+    std::cout << "Hardware features initialized (controlling all cameras)\n" << std::endl;
+
+    // Apply Bias settings from config to ALL cameras
+    for (int i = 0; i < num_cameras; ++i) {
+        auto& cam = app_state->camera_state().camera_manager()->get_camera(i);
+        std::cout << "\nApplying bias settings to Camera " << i << "..." << std::endl;
+        apply_bias_settings(*cam.camera, config.camera_settings());
+    }
 
     // Apply Trail Filter settings from config to ALL cameras directly
     Metavision::I_EventTrailFilterModule::Type trail_type;
@@ -520,8 +531,9 @@ bool try_connect_camera(AppConfig& config, EventCamera::BiasManager& bias_mgr,
             });
 
         // Set up event callback to feed events to frame generator
+        int64_t max_event_age_us = config.runtime_settings().max_event_age_us;  // Capture for lambda
         cam_info.camera->cd().add_callback(
-            [camera_index](const Metavision::EventCD* begin, const Metavision::EventCD* end) {
+            [camera_index, max_event_age_us](const Metavision::EventCD* begin, const Metavision::EventCD* end) {
                 if (begin == end || !app_state) return;
 
                 // Get current time
@@ -545,8 +557,8 @@ bool try_connect_camera(AppConfig& config, EventCamera::BiasManager& bias_mgr,
                 int64_t newest_event_system_ts = cam_start + newest_event_ts;
                 int64_t event_age_us = now_us - newest_event_system_ts;
 
-                // Skip batches with events older than 100ms to stay current
-                if (event_age_us > 100000) {  // 100ms threshold
+                // Skip batches with events older than threshold to stay current
+                if (event_age_us > max_event_age_us) {
                     // Skip old data - don't process into frame generator
                     return;
                 }
@@ -747,7 +759,7 @@ int main(int argc, char* argv[]) {
                 update_texture(sim_frame, 0);  // Simulation uses camera 0
 
                 // Sleep to simulate frame rate
-                std::this_thread::sleep_for(std::chrono::milliseconds(33));  // ~30 FPS
+                std::this_thread::sleep_for(std::chrono::milliseconds(config.runtime_settings().simulation_frame_delay_ms));
             }
         });
     }
@@ -874,422 +886,58 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // Advanced Features panel (TEMP: Hidden - moved to SettingsPanel)
-        /*
-        ImGui::SetNextWindowPos(ImVec2(10, 620), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(400, window_height - 630), ImGuiCond_FirstUseEver);
-
-        if (ImGui::Begin("Camera Settings - Advanced")) {
-        */
-        if (false) { // TEMP: Disabled
-            // Get camera info pointer for Advanced Features section
-            CameraManager::CameraInfo* cam_info_ptr = nullptr;
-            if (app_state->camera_state().is_connected() && app_state->camera_state().camera_manager()) {
-                cam_info_ptr = &app_state->camera_state().camera_manager()->get_camera(0);
-            }
-
-            // ===================================================================
-            // ADVANCED FEATURES
-            // ===================================================================
-            ImGui::Spacing();
-            ImGui::Separator();
-            ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "Advanced Features");
-
-
-
-
-
-
-
-
-            // NOTE: Digital features (Monitoring, ROI, ERC, etc.) are now handled by FeatureManager
-            // and rendered in SettingsPanel::render_digital_features()
-
-            // ROI (Region of Interest) - OLD CODE KEPT FOR REFERENCE
-            Metavision::I_ROI* roi = nullptr;
-            if (app_state->camera_state().is_connected() && cam_info_ptr) {
-                roi = cam_info_ptr->camera->get_device().get_facility<Metavision::I_ROI>();
-            }
-            if (roi) {
-                if (ImGui::CollapsingHeader("Region of Interest (ROI)")) {
-                    static bool roi_enabled = false;
-                    static bool crop_view = false;
-                    static int roi_mode = 0;  // 0=ROI, 1=RONI
-                    static int roi_x = 0;
-                    static int roi_y = 0;
-                    static int roi_width = app_state->display_settings().get_image_width() / 2;
-                    static int roi_height = app_state->display_settings().get_image_height() / 2;
-                    static bool roi_window_changed = false;
-
-                    ImGui::TextWrapped("Define a rectangular region to process or ignore events");
-                    ImGui::Spacing();
-
-                    if (ImGui::Checkbox("Enable ROI", &roi_enabled)) {
-                        roi->enable(roi_enabled);
-                        std::cout << "ROI " << (roi_enabled ? "enabled" : "disabled") << std::endl;
-
-                        // If enabling, apply current window
-                        if (roi_enabled) {
-                            roi_width = std::min(roi_width, app_state->display_settings().get_image_width() - roi_x);
-                            roi_height = std::min(roi_height, app_state->display_settings().get_image_height() - roi_y);
-                            Metavision::I_ROI::Window window(roi_x, roi_y, roi_width, roi_height);
-                            roi->set_window(window);
-                        }
-                    }
-
-                    ImGui::SameLine();
-                    ImGui::Checkbox("Crop View to ROI", &crop_view);
-
-                    ImGui::Spacing();
-                    const char* modes[] = { "ROI (Keep Inside)", "RONI (Discard Inside)" };
-                    if (ImGui::Combo("Mode", &roi_mode, modes, 2)) {
-                        roi->set_mode(roi_mode == 0 ? Metavision::I_ROI::Mode::ROI : Metavision::I_ROI::Mode::RONI);
-                        std::cout << "ROI mode set to " << modes[roi_mode] << std::endl;
-                    }
-
-                    ImGui::Spacing();
-                    ImGui::Text("Window Position & Size:");
-
-                    // Track if any slider changed
-                    roi_window_changed = false;
-                    roi_window_changed |= ImGui::SliderInt("X", &roi_x, 0, app_state->display_settings().get_image_width() - 1);
-                    roi_window_changed |= ImGui::SliderInt("Y", &roi_y, 0, app_state->display_settings().get_image_height() - 1);
-                    roi_window_changed |= ImGui::SliderInt("Width", &roi_width, 1, app_state->display_settings().get_image_width());
-                    roi_window_changed |= ImGui::SliderInt("Height", &roi_height, 1, app_state->display_settings().get_image_height());
-
-                    // Update visualization in real-time (always, even if ROI not enabled)
-                    if (app_state->roi_filter()) {
-                        app_state->roi_filter()->set_enabled(roi_enabled);
-                        app_state->roi_filter()->set_crop_to_roi(crop_view);
-                        app_state->roi_filter()->set_show_rectangle(roi_enabled);
-                        app_state->roi_filter()->set_roi(roi_x, roi_y, roi_width, roi_height);
-                    }
-
-                    // Auto-apply if ROI is enabled and sliders changed
-                    if (roi_window_changed && roi_enabled) {
-                        // Clamp values
-                        roi_width = std::min(roi_width, app_state->display_settings().get_image_width() - roi_x);
-                        roi_height = std::min(roi_height, app_state->display_settings().get_image_height() - roi_y);
-
-                        Metavision::I_ROI::Window window(roi_x, roi_y, roi_width, roi_height);
-                        roi->set_window(window);
-
-                        // Debug output
-                        std::cout << "[ROI UPDATE] Window set to: x=" << roi_x << " y=" << roi_y
-                                  << " w=" << roi_width << " h=" << roi_height << std::endl;
-                    }
-
-                    ImGui::TextWrapped("Window: [%d, %d] %dx%d", roi_x, roi_y, roi_width, roi_height);
-                    if (roi_enabled) {
-                        ImGui::SameLine();
-                        ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "ACTIVE");
-                    }
-                }
-            }
-
-            // ERC (Event Rate Controller)
-            Metavision::I_ErcModule* erc = nullptr;
-            if (app_state->camera_state().is_connected() && cam_info_ptr) {
-                erc = cam_info_ptr->camera->get_device().get_facility<Metavision::I_ErcModule>();
-            }
-            if (erc) {
-                if (ImGui::CollapsingHeader("Event Rate Controller (ERC)")) {
-                    static bool erc_enabled = false;
-                    static int erc_rate_kev = 1000;  // kilo-events per second
-                    static bool erc_initialized = false;
-
-                    // Sync UI with hardware state on first render
-                    if (!erc_initialized) {
-                        try {
-                            // Note: Metavision SDK doesn't provide a way to read enabled state
-                            // We can only read the rate
-                            uint32_t current_rate = erc->get_cd_event_rate();
-                            erc_rate_kev = current_rate / 1000;
-                            std::cout << "ERC: Synced with hardware - current rate: " << current_rate << " ev/s" << std::endl;
-                            erc_initialized = true;
-                        } catch (const std::exception& e) {
-                            std::cerr << "ERC: Could not read initial state: " << e.what() << std::endl;
-                            erc_initialized = true;  // Don't retry every frame
-                        }
-                    }
-
-                    ImGui::TextWrapped("Limit the maximum event rate to prevent bandwidth saturation");
-                    ImGui::Spacing();
-
-                    if (ImGui::Checkbox("Enable ERC", &erc_enabled)) {
-                        try {
-                            erc->enable(erc_enabled);
-                            std::cout << "ERC " << (erc_enabled ? "enabled" : "disabled") << std::endl;
-                        } catch (const std::exception& e) {
-                            std::cerr << "ERROR enabling ERC: " << e.what() << std::endl;
-                            erc_enabled = !erc_enabled;  // Revert checkbox
-                        }
-                    }
-
-                    ImGui::Spacing();
-                    uint32_t min_rate = erc->get_min_supported_cd_event_rate() / 1000;  // Convert to kev/s
-                    uint32_t max_rate = erc->get_max_supported_cd_event_rate() / 1000;
-
-                    if (ImGui::SliderInt("Event Rate (kev/s)", &erc_rate_kev, min_rate, max_rate)) {
-                        try {
-                            uint32_t rate_ev_s = erc_rate_kev * 1000;  // Convert to ev/s
-                            erc->set_cd_event_rate(rate_ev_s);
-                            std::cout << "ERC rate set to " << rate_ev_s << " ev/s" << std::endl;
-                        } catch (const std::exception& e) {
-                            std::cerr << "ERROR setting ERC rate: " << e.what() << std::endl;
-                        }
-                    }
-
-                    ImGui::TextWrapped("Current: %d kev/s (%d Mev/s)", erc_rate_kev, erc_rate_kev / 1000);
-                    ImGui::TextWrapped("Range: %d - %d kev/s", min_rate, max_rate);
-
-                    uint32_t period = erc->get_count_period();
-                    ImGui::Text("Count Period: %d μs", period);
-                }
-            }
-
-            // Anti-Flicker Module
-            Metavision::I_AntiFlickerModule* antiflicker = nullptr;
-            if (app_state->camera_state().is_connected() && cam_info_ptr) {
-                antiflicker = cam_info_ptr->camera->get_device().get_facility<Metavision::I_AntiFlickerModule>();
-            }
-            if (antiflicker) {
-                if (ImGui::CollapsingHeader("Anti-Flicker Filter")) {
-                    static bool af_enabled = false;
-                    static int af_mode = 0;  // 0=BAND_STOP, 1=BAND_PASS
-                    static int af_low_freq = 100;
-                    static int af_high_freq = 150;
-                    static int af_duty_cycle = 50;
-
-                    ImGui::TextWrapped("Filter out flicker from artificial lighting (50/60Hz)");
-                    ImGui::Spacing();
-
-                    if (ImGui::Checkbox("Enable Anti-Flicker", &af_enabled)) {
-                        try {
-                            antiflicker->enable(af_enabled);
-                            std::cout << "Anti-Flicker " << (af_enabled ? "enabled" : "disabled") << std::endl;
-                        } catch (const std::exception& e) {
-                            std::cerr << "ERROR enabling Anti-Flicker: " << e.what() << std::endl;
-                            af_enabled = !af_enabled;  // Revert checkbox
-                        }
-                    }
-
-                    ImGui::Spacing();
-
-                    // Filter Mode
-                    const char* af_modes[] = { "BAND_STOP (Remove frequencies)", "BAND_PASS (Keep frequencies)" };
-                    if (ImGui::Combo("Filter Mode", &af_mode, af_modes, 2)) {
-                        antiflicker->set_filtering_mode(af_mode == 0 ?
-                            Metavision::I_AntiFlickerModule::BAND_STOP :
-                            Metavision::I_AntiFlickerModule::BAND_PASS);
-                        std::cout << "Anti-Flicker mode set to " << af_modes[af_mode] << std::endl;
-                    }
-
-                    ImGui::Spacing();
-                    ImGui::Text("Frequency Band:");
-
-                    // Get supported frequency range
-                    uint32_t min_freq = antiflicker->get_min_supported_frequency();
-                    uint32_t max_freq = antiflicker->get_max_supported_frequency();
-
-                    bool freq_changed = false;
-                    freq_changed |= ImGui::SliderInt("Low Frequency (Hz)", &af_low_freq, min_freq, max_freq);
-                    freq_changed |= ImGui::SliderInt("High Frequency (Hz)", &af_high_freq, min_freq, max_freq);
-
-                    if (freq_changed) {
-                        // Ensure low < high
-                        if (af_low_freq >= af_high_freq) {
-                            af_high_freq = af_low_freq + 1;
-                        }
-                        try {
-                            antiflicker->set_frequency_band(af_low_freq, af_high_freq);
-                            std::cout << "Anti-Flicker frequency band set to [" << af_low_freq
-                                     << ", " << af_high_freq << "] Hz" << std::endl;
-                        } catch (const std::exception& e) {
-                            std::cerr << "Error setting frequency band: " << e.what() << std::endl;
-                        }
-                    }
-
-                    ImGui::Spacing();
-
-                    // Duty Cycle
-                    if (ImGui::SliderInt("Duty Cycle (%)", &af_duty_cycle, 0, 100)) {
-                        try {
-                            antiflicker->set_duty_cycle(af_duty_cycle);
-                            std::cout << "Anti-Flicker duty cycle set to " << af_duty_cycle << "%" << std::endl;
-                        } catch (const std::exception& e) {
-                            std::cerr << "Error setting duty cycle: " << e.what() << std::endl;
-                        }
-                    }
-
-                    ImGui::Spacing();
-                    ImGui::TextWrapped("Common presets:");
-                    ImGui::SameLine();
-                    if (ImGui::SmallButton("50Hz")) {
-                        af_low_freq = std::max((int)min_freq, 45);
-                        af_high_freq = std::min((int)max_freq, 55);
-                        try {
-                            antiflicker->set_frequency_band(af_low_freq, af_high_freq);
-                            std::cout << "Preset: 50Hz filter set [" << af_low_freq << ", " << af_high_freq << "]" << std::endl;
-                        } catch (const std::exception& e) {
-                            std::cerr << "Error setting 50Hz preset: " << e.what() << std::endl;
-                        }
-                    }
-                    ImGui::SameLine();
-                    if (ImGui::SmallButton("60Hz")) {
-                        af_low_freq = std::max((int)min_freq, 55);
-                        af_high_freq = std::min((int)max_freq, 65);
-                        try {
-                            antiflicker->set_frequency_band(af_low_freq, af_high_freq);
-                            std::cout << "Preset: 60Hz filter set [" << af_low_freq << ", " << af_high_freq << "]" << std::endl;
-                        } catch (const std::exception& e) {
-                            std::cerr << "Error setting 60Hz preset: " << e.what() << std::endl;
-                        }
-                    }
-                    ImGui::SameLine();
-                    if (ImGui::SmallButton("100Hz")) {
-                        af_low_freq = std::max((int)min_freq, 95);
-                        af_high_freq = std::min((int)max_freq, 105);
-                        try {
-                            antiflicker->set_frequency_band(af_low_freq, af_high_freq);
-                            std::cout << "Preset: 100Hz filter set [" << af_low_freq << ", " << af_high_freq << "]" << std::endl;
-                        } catch (const std::exception& e) {
-                            std::cerr << "Error setting 100Hz preset: " << e.what() << std::endl;
-                        }
-                    }
-                    ImGui::SameLine();
-                    if (ImGui::SmallButton("120Hz")) {
-                        af_low_freq = std::max((int)min_freq, 115);
-                        af_high_freq = std::min((int)max_freq, 125);
-                        try {
-                            antiflicker->set_frequency_band(af_low_freq, af_high_freq);
-                            std::cout << "Preset: 120Hz filter set [" << af_low_freq << ", " << af_high_freq << "]" << std::endl;
-                        } catch (const std::exception& e) {
-                            std::cerr << "Error setting 120Hz preset: " << e.what() << std::endl;
-                        }
-                    }
-
-                    ImGui::TextWrapped("Range: %d - %d Hz", min_freq, max_freq);
-                }
-            }
-
-            // Event Trail Filter Module
-            Metavision::I_EventTrailFilterModule* trail_filter = nullptr;
-            if (app_state->camera_state().is_connected() && cam_info_ptr) {
-                trail_filter = cam_info_ptr->camera->get_device().get_facility<Metavision::I_EventTrailFilterModule>();
-            }
-            if (trail_filter) {
-                if (ImGui::CollapsingHeader("Event Trail Filter")) {
-                    static bool etf_enabled = false;
-                    static int etf_type = 0;  // 0=TRAIL, 1=STC_CUT_TRAIL, 2=STC_KEEP_TRAIL
-                    static int etf_threshold = 10000;  // microseconds
-
-                    ImGui::TextWrapped("Filter noise from event bursts and rapid flickering");
-                    ImGui::Spacing();
-
-                    if (ImGui::Checkbox("Enable Trail Filter", &etf_enabled)) {
-                        try {
-                            trail_filter->enable(etf_enabled);
-                            std::cout << "Event Trail Filter " << (etf_enabled ? "enabled" : "disabled") << std::endl;
-                        } catch (const std::exception& e) {
-                            std::cerr << "Error enabling trail filter: " << e.what() << std::endl;
-                        }
-                    }
-
-                    ImGui::Spacing();
-
-                    // Filter Type
-                    const char* etf_types[] = {
-                        "TRAIL (Keep first event)",
-                        "STC_CUT_TRAIL (Keep second event)",
-                        "STC_KEEP_TRAIL (Keep trailing events)"
-                    };
-                    if (ImGui::Combo("Filter Type", &etf_type, etf_types, 3)) {
-                        try {
-                            Metavision::I_EventTrailFilterModule::Type type;
-                            switch (etf_type) {
-                                case 0: type = Metavision::I_EventTrailFilterModule::Type::TRAIL; break;
-                                case 1: type = Metavision::I_EventTrailFilterModule::Type::STC_CUT_TRAIL; break;
-                                case 2: type = Metavision::I_EventTrailFilterModule::Type::STC_KEEP_TRAIL; break;
-                                default: type = Metavision::I_EventTrailFilterModule::Type::TRAIL; break;
-                            }
-                            trail_filter->set_type(type);
-                            std::cout << "Trail filter type set to " << etf_types[etf_type] << std::endl;
-                        } catch (const std::exception& e) {
-                            std::cerr << "Error setting trail filter type: " << e.what() << std::endl;
-                        }
-                    }
-
-                    ImGui::Spacing();
-
-                    // Threshold Delay
-                    ImGui::Text("Threshold Delay:");
-                    try {
-                        uint32_t min_thresh = trail_filter->get_min_supported_threshold();
-                        uint32_t max_thresh = trail_filter->get_max_supported_threshold();
-
-                        if (ImGui::SliderInt("Threshold (μs)", &etf_threshold, min_thresh, max_thresh)) {
-                            try {
-                                trail_filter->set_threshold(etf_threshold);
-                                std::cout << "Trail filter threshold set to " << etf_threshold << " μs" << std::endl;
-                            } catch (const std::exception& e) {
-                                std::cerr << "Error setting threshold: " << e.what() << std::endl;
-                            }
-                        }
-
-                        ImGui::TextWrapped("Range: %d - %d μs", min_thresh, max_thresh);
-                        ImGui::Spacing();
-                        ImGui::TextWrapped("Lower threshold = more aggressive filtering");
-                    } catch (const std::exception& e) {
-                        std::cerr << "Error getting threshold range: " << e.what() << std::endl;
-                        ImGui::TextWrapped("Error: Could not get threshold range");
-                    }
-                }
-            }
-
-            // NOTE: Digital Crop removed - use Region of Interest (ROI) instead
-        }
-
         // Genetic Algorithm Optimization section
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Spacing();
 
         if (ImGui::CollapsingHeader("Genetic Algorithm Optimization", ImGuiTreeNodeFlags_DefaultOpen)) {
-            ImGui::TextWrapped("Optimize camera parameters using genetic algorithm");
-            ImGui::Separator();
-
             auto& ga_cfg = config.ga_settings();
 
             if (!ga_state.running) {
-                ImGui::Text("Configuration (from event_config.ini)");
-                ImGui::Text("Population: %d | Generations: %d", ga_cfg.population_size, ga_cfg.num_generations);
-                ImGui::Text("Mutation: %.2f | Crossover: %.2f", ga_cfg.mutation_rate, ga_cfg.crossover_rate);
-                ImGui::Text("Frames/Eval: %d", ga_cfg.frames_per_eval);
+                ImGui::Text("Optimization Parameters");
+                ImGui::Separator();
+
+                // Row 1: Population Size | Generations
+                ImGui::PushItemWidth(100);
+                if (ImGui::InputInt("Population Size", &ga_cfg.population_size)) {
+                    ga_cfg.population_size = std::max(4, ga_cfg.population_size);
+                }
+                ImGui::SameLine();
+                if (ImGui::InputInt("Generations", &ga_cfg.num_generations)) {
+                    ga_cfg.num_generations = std::max(1, ga_cfg.num_generations);
+                }
+                ImGui::PopItemWidth();
+
+                // Row 2: Mutation Rate | Crossover Rate
+                ImGui::PushItemWidth(100);
+                if (ImGui::InputFloat("Mutation Rate", &ga_cfg.mutation_rate, 0.01f, 0.1f, "%.2f")) {
+                    ga_cfg.mutation_rate = std::clamp(ga_cfg.mutation_rate, 0.0f, 1.0f);
+                }
+                ImGui::SameLine();
+                if (ImGui::InputFloat("Crossover Rate", &ga_cfg.crossover_rate, 0.01f, 0.1f, "%.2f")) {
+                    ga_cfg.crossover_rate = std::clamp(ga_cfg.crossover_rate, 0.0f, 1.0f);
+                }
+                ImGui::PopItemWidth();
+
+                // Row 3: Frames per Evaluation
+                ImGui::PushItemWidth(100);
+                if (ImGui::InputInt("Frames/Eval", &ga_cfg.frames_per_eval)) {
+                    ga_cfg.frames_per_eval = std::max(1, ga_cfg.frames_per_eval);
+                }
+                ImGui::PopItemWidth();
 
                 ImGui::Separator();
                 ImGui::Text("Parameters to Optimize:");
-                ImGui::Text("(Edit event_config.ini to change)");
 
-                ImGui::BeginDisabled();
-                bool opt_bd = ga_cfg.optimize_bias_diff;
-                bool opt_br = ga_cfg.optimize_bias_refr;
-                bool opt_bf = ga_cfg.optimize_bias_fo;
-                bool opt_bh = ga_cfg.optimize_bias_hpf;
-                bool opt_ac = ga_cfg.optimize_accumulation;
-                bool opt_tf = ga_cfg.optimize_trail_filter;
-                bool opt_af = ga_cfg.optimize_antiflicker;
-                bool opt_er = ga_cfg.optimize_erc;
-
-                ImGui::Checkbox("bias_diff##ga_opt", &opt_bd); ImGui::SameLine();
-                ImGui::Checkbox("bias_refr##ga_opt", &opt_br);
-                ImGui::Checkbox("bias_fo##ga_opt", &opt_bf); ImGui::SameLine();
-                ImGui::Checkbox("bias_hpf##ga_opt", &opt_bh);
-                ImGui::Checkbox("accumulation##ga_opt", &opt_ac);
-                ImGui::Checkbox("trail_filter##ga_opt", &opt_tf); ImGui::SameLine();
-                ImGui::Checkbox("antiflicker##ga_opt", &opt_af);
-                ImGui::Checkbox("erc##ga_opt", &opt_er);
-                ImGui::EndDisabled();
+                ImGui::Checkbox("bias_diff##ga_opt", &ga_cfg.optimize_bias_diff); ImGui::SameLine();
+                ImGui::Checkbox("bias_refr##ga_opt", &ga_cfg.optimize_bias_refr);
+                ImGui::Checkbox("bias_fo##ga_opt", &ga_cfg.optimize_bias_fo); ImGui::SameLine();
+                ImGui::Checkbox("bias_hpf##ga_opt", &ga_cfg.optimize_bias_hpf);
+                ImGui::Checkbox("accumulation##ga_opt", &ga_cfg.optimize_accumulation);
+                ImGui::Checkbox("trail_filter##ga_opt", &ga_cfg.optimize_trail_filter); ImGui::SameLine();
+                ImGui::Checkbox("antiflicker##ga_opt", &ga_cfg.optimize_antiflicker);
+                ImGui::Checkbox("erc##ga_opt", &ga_cfg.optimize_erc);
 
                 ImGui::Separator();
 

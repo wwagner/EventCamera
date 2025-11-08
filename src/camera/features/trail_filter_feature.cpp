@@ -11,6 +11,10 @@ bool TrailFilterFeature::initialize(Metavision::Camera& camera) {
         return false;
     }
 
+    // Add to list of all cameras
+    all_trail_filters_.clear();
+    all_trail_filters_.push_back(trail_filter_);
+
     try {
         // Get reasonable defaults from hardware
         uint32_t min_thresh = trail_filter_->get_min_supported_threshold();
@@ -28,6 +32,19 @@ bool TrailFilterFeature::initialize(Metavision::Camera& camera) {
     return true;
 }
 
+bool TrailFilterFeature::add_camera(Metavision::Camera& camera) {
+    auto* camera_trail_filter = camera.get_device().get_facility<Metavision::I_EventTrailFilterModule>();
+
+    if (!camera_trail_filter) {
+        std::cerr << "TrailFilterFeature: Additional camera does not support Trail Filter" << std::endl;
+        return false;
+    }
+
+    all_trail_filters_.push_back(camera_trail_filter);
+    std::cout << "TrailFilterFeature: Added camera (now controlling " << all_trail_filters_.size() << " cameras)" << std::endl;
+    return true;
+}
+
 void TrailFilterFeature::shutdown() {
     if (trail_filter_ && enabled_) {
         try {
@@ -39,40 +56,47 @@ void TrailFilterFeature::shutdown() {
 }
 
 void TrailFilterFeature::enable(bool enabled) {
-    if (!trail_filter_) return;
+    if (all_trail_filters_.empty()) return;
 
     enabled_ = enabled;
 
-    try {
-        trail_filter_->enable(enabled_);
-        std::cout << "Event Trail Filter " << (enabled_ ? "enabled" : "disabled") << std::endl;
-    } catch (const std::exception& e) {
-        std::cerr << "TrailFilterFeature: Failed to " << (enabled ? "enable" : "disable")
-                 << ": " << e.what() << std::endl;
+    std::cout << "Event Trail Filter " << (enabled_ ? "enabling" : "disabling")
+              << " on " << all_trail_filters_.size() << " camera(s)..." << std::endl;
+
+    for (size_t i = 0; i < all_trail_filters_.size(); ++i) {
+        try {
+            all_trail_filters_[i]->enable(enabled_);
+            std::cout << "  Camera " << i << ": " << (enabled_ ? "enabled" : "disabled") << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "  Camera " << i << ": Failed to " << (enabled ? "enable" : "disable")
+                     << ": " << e.what() << std::endl;
+        }
     }
 }
 
 void TrailFilterFeature::apply_settings() {
-    if (!trail_filter_ || !enabled_) return;
+    if (all_trail_filters_.empty() || !enabled_) return;
 
-    try {
-        // Apply filter type
-        Metavision::I_EventTrailFilterModule::Type type;
-        switch (filter_type_) {
-            case 0: type = Metavision::I_EventTrailFilterModule::Type::TRAIL; break;
-            case 1: type = Metavision::I_EventTrailFilterModule::Type::STC_CUT_TRAIL; break;
-            case 2: type = Metavision::I_EventTrailFilterModule::Type::STC_KEEP_TRAIL; break;
-            default: type = Metavision::I_EventTrailFilterModule::Type::TRAIL; break;
+    // Determine filter type
+    Metavision::I_EventTrailFilterModule::Type type;
+    switch (filter_type_) {
+        case 0: type = Metavision::I_EventTrailFilterModule::Type::TRAIL; break;
+        case 1: type = Metavision::I_EventTrailFilterModule::Type::STC_CUT_TRAIL; break;
+        case 2: type = Metavision::I_EventTrailFilterModule::Type::STC_KEEP_TRAIL; break;
+        default: type = Metavision::I_EventTrailFilterModule::Type::TRAIL; break;
+    }
+
+    std::cout << "Trail Filter applying settings to " << all_trail_filters_.size() << " camera(s)..." << std::endl;
+
+    for (size_t i = 0; i < all_trail_filters_.size(); ++i) {
+        try {
+            all_trail_filters_[i]->set_type(type);
+            all_trail_filters_[i]->set_threshold(threshold_us_);
+            std::cout << "  Camera " << i << ": type=" << filter_type_
+                     << " threshold=" << threshold_us_ << "μs" << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "  Camera " << i << ": Failed to apply settings: " << e.what() << std::endl;
         }
-        trail_filter_->set_type(type);
-
-        // Apply threshold
-        trail_filter_->set_threshold(threshold_us_);
-
-        std::cout << "Trail Filter settings applied: type=" << filter_type_
-                 << " threshold=" << threshold_us_ << "μs" << std::endl;
-    } catch (const std::exception& e) {
-        std::cerr << "TrailFilterFeature: Failed to apply settings: " << e.what() << std::endl;
     }
 }
 
@@ -128,18 +152,37 @@ bool TrailFilterFeature::render_ui() {
 
         ImGui::Spacing();
 
-        // Threshold Delay
+        // Threshold Delay (converted to ms for display)
         ImGui::Text("Threshold Delay:");
         try {
-            uint32_t min_thresh = trail_filter_->get_min_supported_threshold();
-            uint32_t max_thresh = trail_filter_->get_max_supported_threshold();
+            uint32_t min_thresh_us = trail_filter_->get_min_supported_threshold();
+            uint32_t max_thresh_us = trail_filter_->get_max_supported_threshold();
 
-            if (ImGui::SliderInt("Threshold (μs)", &threshold_us_, min_thresh, max_thresh)) {
+            // Convert to ms for display (constrain slider to 1-100ms range)
+            int min_thresh_ms = std::max(1, (int)(min_thresh_us / 1000));
+            int max_thresh_ms = std::min(100, (int)(max_thresh_us / 1000));
+            int threshold_ms = threshold_us_ / 1000;
+
+            // Slider
+            if (ImGui::SliderInt("Threshold (ms)", &threshold_ms, min_thresh_ms, max_thresh_ms)) {
+                threshold_us_ = threshold_ms * 1000;  // Convert back to μs
                 apply_settings();
                 changed = true;
             }
 
-            ImGui::TextWrapped("Range: %d - %d μs", min_thresh, max_thresh);
+            // Input box next to slider
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(80);
+            int temp_ms = threshold_ms;
+            if (ImGui::InputInt("##threshold_input", &temp_ms)) {
+                temp_ms = std::clamp(temp_ms, min_thresh_ms, max_thresh_ms);
+                threshold_us_ = temp_ms * 1000;  // Convert back to μs
+                apply_settings();
+                changed = true;
+            }
+
+            ImGui::TextWrapped("Current: %d ms (%d μs) [Range: %d - %d ms]",
+                              threshold_ms, threshold_us_, min_thresh_ms, max_thresh_ms);
             ImGui::Spacing();
             ImGui::TextWrapped("Lower threshold = more aggressive filtering");
         } catch (const std::exception& e) {

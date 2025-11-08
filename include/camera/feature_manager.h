@@ -36,6 +36,13 @@ public:
     void initialize_all(Metavision::Camera& camera);
 
     /**
+     * @brief Add an additional camera to be controlled by all features
+     * @param camera Reference to the Metavision camera
+     * @return true if successful
+     */
+    bool add_camera(Metavision::Camera& camera);
+
+    /**
      * @brief Shutdown all features
      */
     void shutdown_all();

@@ -18,6 +18,7 @@ public:
 
     // IHardwareFeature interface
     bool initialize(Metavision::Camera& camera) override;
+    bool add_camera(Metavision::Camera& camera) override;
     void shutdown() override;
     bool is_available() const override { return erc_ != nullptr; }
     bool is_enabled() const override { return enabled_; }
@@ -43,7 +44,8 @@ public:
     int get_event_rate_kevps() const { return target_rate_kevps_; }
 
 private:
-    Metavision::I_ErcModule* erc_ = nullptr;
+    Metavision::I_ErcModule* erc_ = nullptr;  // Primary camera
+    std::vector<Metavision::I_ErcModule*> all_erc_;  // All cameras to control
     bool enabled_ = false;
     int target_rate_kevps_ = 1000;  // kilo-events per second
 };

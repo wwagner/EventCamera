@@ -18,6 +18,7 @@ public:
 
     // IHardwareFeature interface
     bool initialize(Metavision::Camera& camera) override;
+    bool add_camera(Metavision::Camera& camera) override;
     void shutdown() override;
     bool is_available() const override;
     bool is_enabled() const override { return is_available(); }  // Always enabled if available
@@ -38,9 +39,10 @@ private:
      */
     void detect_capabilities();
 
-    Metavision::I_Monitoring* monitoring_ = nullptr;
+    Metavision::I_Monitoring* monitoring_ = nullptr;  // Primary camera
+    std::vector<Metavision::I_Monitoring*> all_monitoring_;  // All cameras
 
-    // Track which capabilities are supported
+    // Track which capabilities are supported (on primary camera)
     bool has_temperature_ = false;
     bool has_illumination_ = false;
     bool has_dead_time_ = false;

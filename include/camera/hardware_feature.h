@@ -35,6 +35,13 @@ public:
     virtual bool initialize(Metavision::Camera& camera) = 0;
 
     /**
+     * @brief Add an additional camera to be controlled
+     * @param camera Reference to the Metavision camera
+     * @return true if successful
+     */
+    virtual bool add_camera(Metavision::Camera& camera) = 0;
+
+    /**
      * @brief Shutdown and cleanup the feature
      */
     virtual void shutdown() = 0;

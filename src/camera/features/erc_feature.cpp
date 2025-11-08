@@ -11,6 +11,10 @@ bool ERCFeature::initialize(Metavision::Camera& camera) {
         return false;
     }
 
+    // Add to list of all cameras
+    all_erc_.clear();
+    all_erc_.push_back(erc_);
+
     // Query current settings
     try {
         enabled_ = erc_->is_enabled();
@@ -31,6 +35,19 @@ bool ERCFeature::initialize(Metavision::Camera& camera) {
     return true;
 }
 
+bool ERCFeature::add_camera(Metavision::Camera& camera) {
+    auto* camera_erc = camera.get_device().get_facility<Metavision::I_ErcModule>();
+
+    if (!camera_erc) {
+        std::cerr << "ERCFeature: Additional camera does not support ERC" << std::endl;
+        return false;
+    }
+
+    all_erc_.push_back(camera_erc);
+    std::cout << "ERCFeature: Added camera (now controlling " << all_erc_.size() << " cameras)" << std::endl;
+    return true;
+}
+
 void ERCFeature::shutdown() {
     if (erc_ && enabled_) {
         try {
@@ -38,33 +55,44 @@ void ERCFeature::shutdown() {
         } catch (...) {}
     }
     erc_ = nullptr;
+    all_erc_.clear();
     enabled_ = false;
 }
 
 void ERCFeature::enable(bool enabled) {
-    if (!erc_) return;
+    if (all_erc_.empty()) return;
 
     enabled_ = enabled;
 
-    try {
-        erc_->enable(enabled_);
-        std::cout << "ERC " << (enabled_ ? "enabled" : "disabled") << std::endl;
-    } catch (const std::exception& e) {
-        std::cerr << "ERCFeature: Failed to " << (enabled ? "enable" : "disable")
-                 << ": " << e.what() << std::endl;
+    std::cout << "ERC " << (enabled_ ? "enabling" : "disabling")
+              << " on " << all_erc_.size() << " camera(s)..." << std::endl;
+
+    for (size_t i = 0; i < all_erc_.size(); ++i) {
+        try {
+            all_erc_[i]->enable(enabled_);
+            std::cout << "  Camera " << i << ": " << (enabled_ ? "enabled" : "disabled") << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "  Camera " << i << ": Failed to " << (enabled ? "enable" : "disable")
+                     << ": " << e.what() << std::endl;
+        }
     }
 }
 
 void ERCFeature::apply_settings() {
-    if (!erc_ || !enabled_) return;
+    if (all_erc_.empty() || !enabled_) return;
 
-    try {
-        uint32_t rate_ev_s = target_rate_kevps_ * 1000;
-        erc_->set_cd_event_rate(rate_ev_s);
-        std::cout << "ERC rate set to " << rate_ev_s << " ev/s ("
-                 << target_rate_kevps_ << " kev/s)" << std::endl;
-    } catch (const std::exception& e) {
-        std::cerr << "ERCFeature: Failed to set event rate: " << e.what() << std::endl;
+    uint32_t rate_ev_s = target_rate_kevps_ * 1000;
+
+    std::cout << "ERC applying settings to " << all_erc_.size() << " camera(s)..." << std::endl;
+
+    for (size_t i = 0; i < all_erc_.size(); ++i) {
+        try {
+            all_erc_[i]->set_cd_event_rate(rate_ev_s);
+            std::cout << "  Camera " << i << ": rate=" << rate_ev_s << " ev/s ("
+                     << target_rate_kevps_ << " kev/s)" << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "  Camera " << i << ": Failed to set event rate: " << e.what() << std::endl;
+        }
     }
 }
 

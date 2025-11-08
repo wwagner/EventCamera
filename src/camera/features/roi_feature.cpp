@@ -21,7 +21,24 @@ bool ROIFeature::initialize(Metavision::Camera& camera) {
         return false;
     }
 
+    // Add to list of all cameras
+    all_roi_.clear();
+    all_roi_.push_back(roi_);
+
     std::cout << "ROIFeature: Initialized" << std::endl;
+    return true;
+}
+
+bool ROIFeature::add_camera(Metavision::Camera& camera) {
+    auto* camera_roi = camera.get_device().get_facility<Metavision::I_ROI>();
+
+    if (!camera_roi) {
+        std::cerr << "ROIFeature: Additional camera does not support ROI" << std::endl;
+        return false;
+    }
+
+    all_roi_.push_back(camera_roi);
+    std::cout << "ROIFeature: Added camera (now controlling " << all_roi_.size() << " cameras)" << std::endl;
     return true;
 }
 
@@ -32,59 +49,74 @@ void ROIFeature::shutdown() {
         } catch (...) {}
     }
     roi_ = nullptr;
+    all_roi_.clear();
     enabled_ = false;
 }
 
 void ROIFeature::enable(bool enabled) {
-    if (!roi_) return;
+    if (all_roi_.empty()) return;
 
     enabled_ = enabled;
 
-    try {
-        roi_->enable(enabled_);
-        std::cout << "ROI " << (enabled_ ? "enabled" : "disabled") << std::endl;
+    std::cout << "ROI " << (enabled_ ? "enabling" : "disabling")
+              << " on " << all_roi_.size() << " camera(s)..." << std::endl;
 
-        // If enabling, apply current window
-        if (enabled_) {
-            apply_settings();
+    for (size_t i = 0; i < all_roi_.size(); ++i) {
+        try {
+            all_roi_[i]->enable(enabled_);
+            std::cout << "  Camera " << i << ": " << (enabled_ ? "enabled" : "disabled") << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "  Camera " << i << ": Failed to " << (enabled ? "enable" : "disable")
+                     << ": " << e.what() << std::endl;
         }
-    } catch (const std::exception& e) {
-        std::cerr << "ROIFeature: Failed to " << (enabled ? "enable" : "disable")
-                 << ": " << e.what() << std::endl;
+    }
+
+    // If enabling, apply current window
+    if (enabled_) {
+        apply_settings();
     }
 }
 
 void ROIFeature::apply_settings() {
-    if (!roi_ || !enabled_) return;
+    if (all_roi_.empty() || !enabled_) return;
 
-    try {
-        // Clamp values to image dimensions
-        int max_width = display_settings_.get_image_width();
-        int max_height = display_settings_.get_image_height();
+    // Clamp values to image dimensions
+    int max_width = display_settings_.get_image_width();
+    int max_height = display_settings_.get_image_height();
 
-        width_ = std::min(width_, max_width - x_);
-        height_ = std::min(height_, max_height - y_);
+    width_ = std::min(width_, max_width - x_);
+    height_ = std::min(height_, max_height - y_);
 
-        Metavision::I_ROI::Window window(x_, y_, width_, height_);
-        roi_->set_window(window);
+    Metavision::I_ROI::Window window(x_, y_, width_, height_);
 
-        std::cout << "[ROI] Window set to: x=" << x_ << " y=" << y_
-                 << " w=" << width_ << " h=" << height_ << std::endl;
-    } catch (const std::exception& e) {
-        std::cerr << "ROIFeature: Failed to apply settings: " << e.what() << std::endl;
+    std::cout << "ROI applying settings to " << all_roi_.size() << " camera(s)..." << std::endl;
+
+    for (size_t i = 0; i < all_roi_.size(); ++i) {
+        try {
+            all_roi_[i]->set_window(window);
+            std::cout << "  Camera " << i << ": x=" << x_ << " y=" << y_
+                     << " w=" << width_ << " h=" << height_ << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "  Camera " << i << ": Failed to apply settings: " << e.what() << std::endl;
+        }
     }
 }
 
 void ROIFeature::set_mode(Metavision::I_ROI::Mode mode) {
-    if (!roi_) return;
+    if (all_roi_.empty()) return;
 
     mode_ = (mode == Metavision::I_ROI::Mode::ROI) ? 0 : 1;
 
-    try {
-        roi_->set_mode(mode);
-        std::cout << "ROI mode set to " << (mode_ == 0 ? "ROI" : "RONI") << std::endl;
-    } catch (const std::exception& e) {
-        std::cerr << "ROIFeature: Failed to set mode: " << e.what() << std::endl;
+    std::cout << "ROI setting mode to " << (mode_ == 0 ? "ROI" : "RONI")
+              << " on " << all_roi_.size() << " camera(s)..." << std::endl;
+
+    for (size_t i = 0; i < all_roi_.size(); ++i) {
+        try {
+            all_roi_[i]->set_mode(mode);
+            std::cout << "  Camera " << i << ": mode=" << (mode_ == 0 ? "ROI" : "RONI") << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "  Camera " << i << ": Failed to set mode: " << e.what() << std::endl;
+        }
     }
 }
 

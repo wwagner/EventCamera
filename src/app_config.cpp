@@ -303,6 +303,13 @@ bool AppConfig::load(const std::string& filename) {
                 }
             }
         }
+        else if (section == "Runtime") {
+            if (key == "max_event_age_us") runtime_settings_.max_event_age_us = std::stoll(value);
+            else if (key == "ga_frame_capture_wait_ms") runtime_settings_.ga_frame_capture_wait_ms = std::stoi(value);
+            else if (key == "ga_frame_capture_max_attempts") runtime_settings_.ga_frame_capture_max_attempts = std::stoi(value);
+            else if (key == "ga_parameter_settle_ms") runtime_settings_.ga_parameter_settle_ms = std::stoi(value);
+            else if (key == "simulation_frame_delay_ms") runtime_settings_.simulation_frame_delay_ms = std::stoi(value);
+        }
     }
 
     std::cout << "Configuration loaded from: " << filename << std::endl;
