@@ -1193,6 +1193,18 @@ int main(int argc, char* argv[]) {
                         params.minimum_event_pixels = 500;  // 23 dots × ~25-50 pixels each
                         params.delta = 5.0f;  // Heavy penalty for insufficient events
 
+                        // Set optimization mask from config checkboxes
+                        params.opt_mask.bias_diff = ga_cfg.optimize_bias_diff;
+                        params.opt_mask.bias_diff_on = ga_cfg.optimize_bias_diff_on;
+                        params.opt_mask.bias_diff_off = ga_cfg.optimize_bias_diff_off;
+                        params.opt_mask.bias_refr = ga_cfg.optimize_bias_refr;
+                        params.opt_mask.bias_fo = false;  // Currently no checkbox for these
+                        params.opt_mask.bias_hpf = false;
+                        params.opt_mask.accumulation = ga_cfg.optimize_accumulation;
+                        params.opt_mask.trail_filter = ga_cfg.optimize_trail_filter;
+                        params.opt_mask.antiflicker = false;  // No checkbox for these
+                        params.opt_mask.erc = false;
+
                         // Get bias ranges from BiasManager
                         EventCameraGeneticOptimizer::Genome::BiasRanges hw_ranges;
                         const auto& bias_ranges = bias_manager.get_bias_ranges();
@@ -1597,6 +1609,18 @@ int main(int argc, char* argv[]) {
                         params.gamma = 2.0f;
                         params.minimum_event_pixels = 500;
                         params.delta = 5.0f;
+
+                        // Set optimization mask from config checkboxes
+                        params.opt_mask.bias_diff = ga_cfg.optimize_bias_diff;
+                        params.opt_mask.bias_diff_on = ga_cfg.optimize_bias_diff_on;
+                        params.opt_mask.bias_diff_off = ga_cfg.optimize_bias_diff_off;
+                        params.opt_mask.bias_refr = ga_cfg.optimize_bias_refr;
+                        params.opt_mask.bias_fo = ga_cfg.optimize_bias_fo;
+                        params.opt_mask.bias_hpf = ga_cfg.optimize_bias_hpf;
+                        params.opt_mask.accumulation = ga_cfg.optimize_accumulation;
+                        params.opt_mask.trail_filter = ga_cfg.optimize_trail_filter;
+                        params.opt_mask.antiflicker = ga_cfg.optimize_antiflicker;
+                        params.opt_mask.erc = ga_cfg.optimize_erc;
 
                         // Get bias ranges from BiasManager
                         EventCameraGeneticOptimizer::Genome::BiasRanges hw_ranges;

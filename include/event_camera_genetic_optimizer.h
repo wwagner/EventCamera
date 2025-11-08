@@ -65,8 +65,22 @@ public:
             int erc_rate_min = 1000, erc_rate_max = 10000;
         } ranges;
 
+        // Optimization mask (which parameters to optimize)
+        struct OptimizationMask {
+            bool bias_diff = true;
+            bool bias_diff_on = true;
+            bool bias_diff_off = true;
+            bool bias_refr = true;
+            bool bias_fo = true;
+            bool bias_hpf = true;
+            bool accumulation = true;
+            bool trail_filter = false;
+            bool antiflicker = false;
+            bool erc = false;
+        } opt_mask;
+
         Genome();  // Initialize with default values
-        void randomize(std::mt19937& rng);  // Randomize within bounds
+        void randomize(std::mt19937& rng);  // Randomize within bounds (respects opt_mask)
         void clamp();  // Enforce bounds and constraints
         void set_ranges(const BiasRanges& r);  // Set hardware-specific ranges
     };
@@ -146,6 +160,9 @@ public:
         int log_interval = 1;               // Log every N generations
         std::string log_file = "event_camera_optimization_log.csv";
         std::string best_config_file = "best_event_config.ini";
+
+        // Optimization mask (which parameters to optimize)
+        Genome::OptimizationMask opt_mask;
     };
 
     /**

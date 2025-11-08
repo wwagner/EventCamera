@@ -32,43 +32,62 @@ EventCameraGeneticOptimizer::Genome::Genome() {
 }
 
 void EventCameraGeneticOptimizer::Genome::randomize(mt19937& rng) {
-    // Randomize camera biases
-    uniform_int_distribution<int> diff_dist(ranges.diff_min, ranges.diff_max);
-    uniform_int_distribution<int> diff_on_dist(ranges.diff_on_min, ranges.diff_on_max);
-    uniform_int_distribution<int> diff_off_dist(ranges.diff_off_min, ranges.diff_off_max);
-    uniform_int_distribution<int> refr_dist(ranges.refr_min, ranges.refr_max);
-    uniform_int_distribution<int> fo_dist(ranges.fo_min, ranges.fo_max);
-    uniform_int_distribution<int> hpf_dist(ranges.hpf_min, ranges.hpf_max);
-
-    bias_diff = diff_dist(rng);
-    bias_diff_on = diff_on_dist(rng);
-    bias_diff_off = diff_off_dist(rng);
-    bias_refr = refr_dist(rng);
-    bias_fo = fo_dist(rng);
-    bias_hpf = hpf_dist(rng);
+    // Randomize camera biases (only if enabled in mask)
+    if (opt_mask.bias_diff) {
+        uniform_int_distribution<int> diff_dist(ranges.diff_min, ranges.diff_max);
+        bias_diff = diff_dist(rng);
+    }
+    if (opt_mask.bias_diff_on) {
+        uniform_int_distribution<int> diff_on_dist(ranges.diff_on_min, ranges.diff_on_max);
+        bias_diff_on = diff_on_dist(rng);
+    }
+    if (opt_mask.bias_diff_off) {
+        uniform_int_distribution<int> diff_off_dist(ranges.diff_off_min, ranges.diff_off_max);
+        bias_diff_off = diff_off_dist(rng);
+    }
+    if (opt_mask.bias_refr) {
+        uniform_int_distribution<int> refr_dist(ranges.refr_min, ranges.refr_max);
+        bias_refr = refr_dist(rng);
+    }
+    if (opt_mask.bias_fo) {
+        uniform_int_distribution<int> fo_dist(ranges.fo_min, ranges.fo_max);
+        bias_fo = fo_dist(rng);
+    }
+    if (opt_mask.bias_hpf) {
+        uniform_int_distribution<int> hpf_dist(ranges.hpf_min, ranges.hpf_max);
+        bias_hpf = hpf_dist(rng);
+    }
 
     // Randomize accumulation time (log-scale for better distribution)
-    uniform_real_distribution<float> log_accum_dist(log(0.001f), log(0.1f));
-    accumulation_time_s = exp(log_accum_dist(rng));
+    if (opt_mask.accumulation) {
+        uniform_real_distribution<float> log_accum_dist(log(0.001f), log(0.1f));
+        accumulation_time_s = exp(log_accum_dist(rng));
+    }
 
     // Trail filter: Always enabled when optimizing, only randomize threshold
-    enable_trail_filter = true;  // Always ON - filter type will be STC_KEEP_TRAIL
-    uniform_int_distribution<int> trail_dist(ranges.trail_min, ranges.trail_max);
-    trail_threshold_us = trail_dist(rng);
+    if (opt_mask.trail_filter) {
+        enable_trail_filter = true;  // Always ON - filter type will be STC_KEEP_TRAIL
+        uniform_int_distribution<int> trail_dist(ranges.trail_min, ranges.trail_max);
+        trail_threshold_us = trail_dist(rng);
+    }
 
     // Boolean distribution for optional features
     bernoulli_distribution enable_dist(0.5);
 
     // Randomize anti-flicker
-    enable_antiflicker = enable_dist(rng);
-    uniform_int_distribution<int> freq_dist(ranges.af_freq_min, ranges.af_freq_max);
-    af_low_freq = freq_dist(rng);
-    af_high_freq = af_low_freq + 10 + (freq_dist(rng) % 50);  // Ensure high > low
+    if (opt_mask.antiflicker) {
+        enable_antiflicker = enable_dist(rng);
+        uniform_int_distribution<int> freq_dist(ranges.af_freq_min, ranges.af_freq_max);
+        af_low_freq = freq_dist(rng);
+        af_high_freq = af_low_freq + 10 + (freq_dist(rng) % 50);  // Ensure high > low
+    }
 
     // Randomize ERC
-    enable_erc = enable_dist(rng);
-    uniform_int_distribution<int> erc_dist(ranges.erc_rate_min, ranges.erc_rate_max);
-    erc_target_rate = erc_dist(rng);
+    if (opt_mask.erc) {
+        enable_erc = enable_dist(rng);
+        uniform_int_distribution<int> erc_dist(ranges.erc_rate_min, ranges.erc_rate_max);
+        erc_target_rate = erc_dist(rng);
+    }
 
     clamp();
 }
@@ -223,6 +242,8 @@ void EventCameraGeneticOptimizer::initialize_population() {
             break;
         }
 
+        // Set optimization mask before randomization
+        population_[i].opt_mask = params_.opt_mask;
         population_[i].randomize(rng_);
         fitness_cache_[i] = evaluate_fitness(population_[i]);
 
@@ -351,6 +372,8 @@ EventCameraGeneticOptimizer::crossover(const Genome& parent1, const Genome& pare
 
     // Uniform crossover - randomly pick each gene from either parent
     offspring.bias_diff = coin_flip(rng_) ? parent1.bias_diff : parent2.bias_diff;
+    offspring.bias_diff_on = coin_flip(rng_) ? parent1.bias_diff_on : parent2.bias_diff_on;
+    offspring.bias_diff_off = coin_flip(rng_) ? parent1.bias_diff_off : parent2.bias_diff_off;
     offspring.bias_refr = coin_flip(rng_) ? parent1.bias_refr : parent2.bias_refr;
     offspring.bias_fo = coin_flip(rng_) ? parent1.bias_fo : parent2.bias_fo;
     offspring.bias_hpf = coin_flip(rng_) ? parent1.bias_hpf : parent2.bias_hpf;
@@ -373,6 +396,7 @@ EventCameraGeneticOptimizer::crossover(const Genome& parent1, const Genome& pare
         parent1.erc_target_rate : parent2.erc_target_rate;
 
     offspring.ranges = parent1.ranges;  // Copy ranges
+    offspring.opt_mask = parent1.opt_mask;  // Copy optimization mask
     offspring.clamp();
 
     return offspring;
@@ -381,40 +405,40 @@ EventCameraGeneticOptimizer::crossover(const Genome& parent1, const Genome& pare
 void EventCameraGeneticOptimizer::mutate(Genome& genome) {
     bernoulli_distribution mutate_dist(params_.mutation_rate);
 
-    // Mutate camera biases
-    if (mutate_dist(rng_)) {
+    // Mutate camera biases (only if enabled in mask)
+    if (genome.opt_mask.bias_diff && mutate_dist(rng_)) {
         int range = genome.ranges.diff_max - genome.ranges.diff_min;
         normal_distribution<float> noise(0.0f, params_.mutation_strength * range);
         genome.bias_diff += static_cast<int>(noise(rng_));
     }
-    if (mutate_dist(rng_)) {
+    if (genome.opt_mask.bias_diff_on && mutate_dist(rng_)) {
         int range = genome.ranges.diff_on_max - genome.ranges.diff_on_min;
         normal_distribution<float> noise(0.0f, params_.mutation_strength * range);
         genome.bias_diff_on += static_cast<int>(noise(rng_));
     }
-    if (mutate_dist(rng_)) {
+    if (genome.opt_mask.bias_diff_off && mutate_dist(rng_)) {
         int range = genome.ranges.diff_off_max - genome.ranges.diff_off_min;
         normal_distribution<float> noise(0.0f, params_.mutation_strength * range);
         genome.bias_diff_off += static_cast<int>(noise(rng_));
     }
-    if (mutate_dist(rng_)) {
+    if (genome.opt_mask.bias_refr && mutate_dist(rng_)) {
         int range = genome.ranges.refr_max - genome.ranges.refr_min;
         normal_distribution<float> noise(0.0f, params_.mutation_strength * range);
         genome.bias_refr += static_cast<int>(noise(rng_));
     }
-    if (mutate_dist(rng_)) {
+    if (genome.opt_mask.bias_fo && mutate_dist(rng_)) {
         int range = genome.ranges.fo_max - genome.ranges.fo_min;
         normal_distribution<float> noise(0.0f, params_.mutation_strength * range);
         genome.bias_fo += static_cast<int>(noise(rng_));
     }
-    if (mutate_dist(rng_)) {
+    if (genome.opt_mask.bias_hpf && mutate_dist(rng_)) {
         int range = genome.ranges.hpf_max - genome.ranges.hpf_min;
         normal_distribution<float> noise(0.0f, params_.mutation_strength * range);
         genome.bias_hpf += static_cast<int>(noise(rng_));
     }
 
     // Mutate accumulation time (log-space)
-    if (mutate_dist(rng_)) {
+    if (genome.opt_mask.accumulation && mutate_dist(rng_)) {
         float log_val = log(genome.accumulation_time_s);
         normal_distribution<float> noise(0.0f, params_.mutation_strength * (log(0.1f) - log(0.001f)));
         log_val += noise(rng_);
@@ -422,17 +446,17 @@ void EventCameraGeneticOptimizer::mutate(Genome& genome) {
     }
 
     // Mutate trail filter threshold only (enable is always true, type is STC_KEEP_TRAIL)
-    if (mutate_dist(rng_)) {
+    if (genome.opt_mask.trail_filter && mutate_dist(rng_)) {
         int range = genome.ranges.trail_max - genome.ranges.trail_min;
         normal_distribution<float> noise(0.0f, params_.mutation_strength * range);
         genome.trail_threshold_us += static_cast<int>(noise(rng_));
     }
 
     // Mutate anti-flicker
-    if (mutate_dist(rng_)) {
+    if (genome.opt_mask.antiflicker && mutate_dist(rng_)) {
         genome.enable_antiflicker = !genome.enable_antiflicker;
     }
-    if (mutate_dist(rng_)) {
+    if (genome.opt_mask.antiflicker && mutate_dist(rng_)) {
         int range = genome.ranges.af_freq_max - genome.ranges.af_freq_min;
         normal_distribution<float> noise(0.0f, params_.mutation_strength * range);
         genome.af_low_freq += static_cast<int>(noise(rng_));
@@ -440,10 +464,10 @@ void EventCameraGeneticOptimizer::mutate(Genome& genome) {
     }
 
     // Mutate ERC
-    if (mutate_dist(rng_)) {
+    if (genome.opt_mask.erc && mutate_dist(rng_)) {
         genome.enable_erc = !genome.enable_erc;
     }
-    if (mutate_dist(rng_)) {
+    if (genome.opt_mask.erc && mutate_dist(rng_)) {
         int range = genome.ranges.erc_rate_max - genome.ranges.erc_rate_min;
         normal_distribution<float> noise(0.0f, params_.mutation_strength * range);
         genome.erc_target_rate += static_cast<int>(noise(rng_));
