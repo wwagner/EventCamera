@@ -81,6 +81,89 @@ struct GAState {
     video::FrameBuffer ga_frame_buffer;  // Dedicated buffer for GA
 } ga_state;
 
+// ============================================================================
+// Binary Stream Processing Infrastructure
+// ============================================================================
+
+/**
+ * Create lookup table for binary stream conversion
+ * Maps pixel values in [range_lower, range_upper] to 255, all others to 0
+ */
+static cv::Mat create_binary_stream_lut(int range_lower, int range_upper) {
+    cv::Mat lut(1, 256, CV_8U);
+    for (int i = 0; i < 256; i++) {
+        lut.at<uchar>(i) = (i >= range_lower && i <= range_upper) ? 255 : 0;
+    }
+    return lut;
+}
+
+// Binary stream lookup tables (initialized once for performance)
+static cv::Mat lut_down;      // Range 3: [96-127] → 255, else → 0
+static cv::Mat lut_up;         // Range 7: [224-255] → 255, else → 0
+static cv::Mat lut_combined;   // Both ranges → 255, else → 0
+static bool luts_initialized = false;
+
+void initialize_binary_stream_luts() {
+    if (luts_initialized) return;
+
+    // Down stream: Range 3 [96-127]
+    lut_down = create_binary_stream_lut(96, 127);
+
+    // Up stream: Range 7 [224-255]
+    lut_up = create_binary_stream_lut(224, 255);
+
+    // Combined: Both ranges
+    lut_combined = cv::Mat(1, 256, CV_8U);
+    for (int i = 0; i < 256; i++) {
+        bool in_down = (i >= 96 && i <= 127);
+        bool in_up = (i >= 224 && i <= 255);
+        lut_combined.at<uchar>(i) = (in_down || in_up) ? 255 : 0;
+    }
+
+    luts_initialized = true;
+}
+
+/**
+ * Apply binary stream mode conversion (early 1-bit conversion)
+ * This is the FIRST processing step - happens before all other processing
+ *
+ * @param frame Input 8-bit frame (BGR or grayscale)
+ * @param mode Binary stream mode (OFF/DOWN/UP/UP_DOWN)
+ * @return Processed frame (single-channel 1-bit if mode != OFF)
+ */
+cv::Mat apply_binary_stream_mode(const cv::Mat& frame,
+                                  core::DisplaySettings::BinaryStreamMode mode) {
+    using Mode = core::DisplaySettings::BinaryStreamMode;
+
+    if (mode == Mode::OFF) {
+        return frame;  // Pass through unchanged (8-bit)
+    }
+
+    initialize_binary_stream_luts();
+
+    // Convert to single-channel grayscale if needed
+    cv::Mat gray;
+    if (frame.channels() == 3) {
+        cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
+    } else {
+        gray = frame;
+    }
+
+    // Apply LUT for ultra-fast 1-bit conversion
+    cv::Mat binary_1bit;
+    switch (mode) {
+        case Mode::DOWN:    cv::LUT(gray, lut_down, binary_1bit); break;
+        case Mode::UP:      cv::LUT(gray, lut_up, binary_1bit); break;
+        case Mode::UP_DOWN: cv::LUT(gray, lut_combined, binary_1bit); break;
+        default: binary_1bit = gray; break;
+    }
+
+    // Return as single-channel (most efficient)
+    return binary_1bit;
+}
+
+// ============================================================================
+
 /**
  * Store frame in frame buffer
  * Implements frame dropping to prevent queue buildup and maintain real-time display
@@ -254,7 +337,7 @@ EventCameraGeneticOptimizer::FitnessResult evaluate_genome_fitness(
             app_state->camera_state().frame_generator()->set_output_callback([](const Metavision::timestamp ts, cv::Mat& frame) {
                 if (frame.empty() || !app_state) return;
 
-                // If GA is capturing, store in GA buffer (unprocessed)
+                // Store RAW frame for GA if capturing (before any processing)
                 if (ga_state.capturing_for_ga) {
                     ga_state.ga_frame_buffer.store_frame(frame.clone());
                 }
@@ -262,35 +345,20 @@ EventCameraGeneticOptimizer::FitnessResult evaluate_genome_fitness(
                 // Apply display processing (for display only, not for GA capture)
                 cv::Mat display_frame = frame.clone();
 
-                // Convert to grayscale if requested
+                // *** STEP 1: EARLY BINARY STREAM CONVERSION ***
+                auto stream_mode = app_state->display_settings().get_binary_stream_mode();
+                display_frame = apply_binary_stream_mode(display_frame, stream_mode);
+
+                // *** STEP 2: Optional grayscale ***
                 if (app_state->display_settings().get_grayscale_mode() && display_frame.channels() == 3) {
                     cv::Mat gray;
                     cv::cvtColor(display_frame, gray, cv::COLOR_BGR2GRAY);
                     cv::cvtColor(gray, display_frame, cv::COLOR_GRAY2BGR);
                 }
 
-                // Convert to binary if requested (show only pixels in specific bit range)
-                if (app_state->display_settings().get_binary_mode() && !display_frame.empty()) {
-                    int threshold_value = app_state->display_settings().get_binary_threshold();
-
-                    cv::Mat mask;
-                    if (threshold_value == 255) {
-                        // Combined mode: Range 3 + Range 7
-                        cv::Mat mask3, mask7;
-                        cv::inRange(display_frame, cv::Scalar(96, 96, 96), cv::Scalar(127, 127, 127), mask3);
-                        cv::inRange(display_frame, cv::Scalar(224, 224, 224), cv::Scalar(255, 255, 255), mask7);
-                        mask = mask3 | mask7;  // Combine masks
-                    } else {
-                        // Single range mode
-                        int lower_bound = threshold_value;
-                        int upper_bound = threshold_value + 31;
-                        cv::inRange(display_frame, cv::Scalar(lower_bound, lower_bound, lower_bound),
-                                   cv::Scalar(upper_bound, upper_bound, upper_bound), mask);
-                    }
-
-                    // Set output: white where in range, black elsewhere
-                    display_frame.setTo(cv::Scalar(0, 0, 0));  // All black
-                    display_frame.setTo(cv::Scalar(255, 255, 255), mask);  // White where in range
+                // *** STEP 3: Convert to BGR if single-channel ***
+                if (display_frame.channels() == 1) {
+                    cv::cvtColor(display_frame, display_frame, cv::COLOR_GRAY2BGR);
                 }
 
                 // Rate limit display updates to target FPS
@@ -378,35 +446,20 @@ EventCameraGeneticOptimizer::FitnessResult evaluate_genome_fitness(
     // Apply display processing to frames if requested
     if (config.ga_settings().use_processed_pixels && app_state) {
         for (auto& frame : captured_frames) {
-            // Apply grayscale conversion if enabled
+            // *** STEP 1: EARLY BINARY STREAM CONVERSION ***
+            auto stream_mode = app_state->display_settings().get_binary_stream_mode();
+            frame = apply_binary_stream_mode(frame, stream_mode);
+
+            // *** STEP 2: Optional grayscale ***
             if (app_state->display_settings().get_grayscale_mode() && frame.channels() == 3) {
                 cv::Mat gray;
                 cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
                 cv::cvtColor(gray, frame, cv::COLOR_GRAY2BGR);
             }
 
-            // Apply binary threshold if enabled (show only pixels in specific bit range)
-            if (app_state->display_settings().get_binary_mode() && !frame.empty()) {
-                int threshold_value = app_state->display_settings().get_binary_threshold();
-
-                cv::Mat mask;
-                if (threshold_value == 255) {
-                    // Combined mode: Range 3 + Range 7
-                    cv::Mat mask3, mask7;
-                    cv::inRange(frame, cv::Scalar(96, 96, 96), cv::Scalar(127, 127, 127), mask3);
-                    cv::inRange(frame, cv::Scalar(224, 224, 224), cv::Scalar(255, 255, 255), mask7);
-                    mask = mask3 | mask7;  // Combine masks
-                } else {
-                    // Single range mode
-                    int lower_bound = threshold_value;
-                    int upper_bound = threshold_value + 31;
-                    cv::inRange(frame, cv::Scalar(lower_bound, lower_bound, lower_bound),
-                               cv::Scalar(upper_bound, upper_bound, upper_bound), mask);
-                }
-
-                // Set output: white where in range, black elsewhere
-                frame.setTo(cv::Scalar(0, 0, 0));  // All black
-                frame.setTo(cv::Scalar(255, 255, 255), mask);  // White where in range
+            // *** STEP 3: Ensure BGR for downstream processing ***
+            if (frame.channels() == 1) {
+                cv::cvtColor(frame, frame, cv::COLOR_GRAY2BGR);
             }
         }
     }
@@ -644,48 +697,22 @@ bool try_connect_camera(AppConfig& config, EventCamera::BiasManager& bias_mgr,
             [camera_index](const Metavision::timestamp ts, cv::Mat& frame) {
                 if (frame.empty() || !app_state) return;
 
-                // Debug: Print frame info once
-                static bool printed_once = false;
-                if (!printed_once) {
-                    std::cout << "Frame info: "
-                              << "channels=" << frame.channels()
-                              << " type=" << frame.type()
-                              << " CV_8UC1=" << CV_8UC1
-                              << " CV_8UC3=" << CV_8UC3
-                              << " size=" << frame.size()
-                              << std::endl;
-                    printed_once = true;
-                }
+                // *** STEP 1: EARLY BINARY STREAM CONVERSION ***
+                // This happens FIRST - convert 8-bit to 1-bit based on range selection
+                auto stream_mode = app_state->display_settings().get_binary_stream_mode();
+                frame = apply_binary_stream_mode(frame, stream_mode);
 
-                // Convert to grayscale if requested (BGR -> GRAY -> BGR for display compatibility)
+                // *** STEP 2: Optional grayscale (now works on already-converted 1-bit if stream mode is on) ***
+                // NOTE: If stream mode is ON, frame is already single-channel, so this only applies if OFF
                 if (app_state->display_settings().get_grayscale_mode() && frame.channels() == 3) {
                     cv::Mat gray;
                     cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
                     cv::cvtColor(gray, frame, cv::COLOR_GRAY2BGR);
                 }
 
-                // Convert to binary if requested (show only pixels in specific bit range)
-                if (app_state->display_settings().get_binary_mode() && !frame.empty()) {
-                    int threshold_value = app_state->display_settings().get_binary_threshold();
-
-                    cv::Mat mask;
-                    if (threshold_value == 255) {
-                        // Combined mode: Range 3 + Range 7
-                        cv::Mat mask3, mask7;
-                        cv::inRange(frame, cv::Scalar(96, 96, 96), cv::Scalar(127, 127, 127), mask3);
-                        cv::inRange(frame, cv::Scalar(224, 224, 224), cv::Scalar(255, 255, 255), mask7);
-                        mask = mask3 | mask7;  // Combine masks
-                    } else {
-                        // Single range mode
-                        int lower_bound = threshold_value;
-                        int upper_bound = threshold_value + 31;
-                        cv::inRange(frame, cv::Scalar(lower_bound, lower_bound, lower_bound),
-                                   cv::Scalar(upper_bound, upper_bound, upper_bound), mask);
-                    }
-
-                    // Set output: white where in range, black elsewhere
-                    frame.setTo(cv::Scalar(0, 0, 0));  // All black
-                    frame.setTo(cv::Scalar(255, 255, 255), mask);  // White where in range
+                // *** STEP 3: Convert to BGR for GPU upload if needed ***
+                if (frame.channels() == 1) {
+                    cv::cvtColor(frame, frame, cv::COLOR_GRAY2BGR);
                 }
 
                 // Rate limit display updates to target FPS

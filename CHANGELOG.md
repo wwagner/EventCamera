@@ -2,9 +2,34 @@
 
 All notable changes to the Event Camera Viewer project are documented in this file.
 
-## [Unreleased] - 2025-11-04
+## [Unreleased] - 2025-11-08
 
 ### Added
+
+#### Display Processing Features
+
+- **Binary Stream Processing**: Ultra-fast LUT-based pixel range filtering
+  - Enable/disable via "Binary Stream Mode" dropdown
+  - Four processing modes:
+    - OFF: Normal 8-bit passthrough (no filtering)
+    - DOWN: Show only Range 3 pixels [96-127] (mid-range events)
+    - UP: Show only Range 7 pixels [224-255] (bright events)
+    - UP_DOWN: Show both ranges combined (mid + bright events)
+  - **Performance Optimized Implementation**:
+    - Lookup table operations (~1-2 CPU cycles per pixel)
+    - Single-channel output (66% memory bandwidth reduction: 900KB vs 2.7MB)
+    - Early conversion at source (happens before all other processing)
+    - Cache-friendly (256-byte LUT fits in L1 cache)
+    - No branching in hot path for maximum performance
+  - **GA Integration**: Works with Genetic Algorithm optimization
+    - Applies filtering when "Use Processed Pixels" enabled
+    - Allows GA to optimize based on specific pixel ranges
+  - **Complete Processing Pipeline**:
+    - Main camera callbacks updated for binary stream processing
+    - GA frame generation callback updated
+    - GA fitness evaluation processing updated
+  - Replaces old binary threshold system with more efficient LUT-based approach
+  - Maintains full compatibility with grayscale mode
 
 #### Core Features
 - **Dynamic Bias Range Detection**: Camera biases now query hardware-specific ranges at startup
@@ -87,6 +112,14 @@ All notable changes to the Event Camera Viewer project are documented in this fi
   - Technical notes on thread safety and performance
 
 ### Changed
+
+#### Display Processing
+- **Binary Processing Refactor**:
+  - Replaced old binary threshold system with LUT-based binary stream processing
+  - Changed from `cv::inRange()` (slow, per-pixel branching) to `cv::LUT()` (fast, O(1) lookup)
+  - Moved processing to early conversion point (before all other processing)
+  - Updated tooltip from "binary threshold" to "binary stream" in GA settings
+  - Simplified processing pipeline with single-channel intermediate format
 
 #### Configuration
 - **Renamed Configuration File**: `tracking_config.ini` → `event_config.ini`
@@ -198,6 +231,12 @@ All notable changes to the Event Camera Viewer project are documented in this fi
 - Hardcoded bias ranges (replaced by dynamic detection)
 - Illumination sensor monitoring (not supported by hardware)
 - "Apply ROI Window" button (replaced by auto-apply)
+- **Old Binary Threshold System** (replaced by binary stream processing):
+  - `get_binary_mode()` and `set_binary_mode()` methods
+  - `get_binary_threshold()` and `set_binary_threshold()` methods
+  - Slow `cv::inRange()` based pixel filtering
+  - Per-pixel branching and masking operations
+  - Binary mode atomic variables in DisplaySettings
 
 ---
 

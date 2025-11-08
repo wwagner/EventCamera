@@ -845,7 +845,7 @@ void SettingsPanel::render_genetic_algorithm() {
             settings_changed_ = true;
         }
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Apply grayscale and binary threshold processing to frames before fitness evaluation");
+            ImGui::SetTooltip("Apply grayscale and binary stream processing to frames before fitness evaluation");
         }
 
         ImGui::Spacing();

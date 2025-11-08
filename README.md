@@ -65,6 +65,29 @@ A comprehensive C++ application for viewing and controlling event camera feeds w
 - Reduces processing load and improves performance
 - Similar to ROI but less flexible (entire sensor resolution reduced)
 
+### Display Processing Features
+
+#### Binary Stream Processing
+- **Early 1-bit Conversion**: Ultra-fast LUT-based pixel range filtering
+- **Stream Modes**:
+  - OFF: Normal 8-bit passthrough (no filtering)
+  - DOWN: Show only Range 3 pixels [96-127] (mid-range events)
+  - UP: Show only Range 7 pixels [224-255] (bright events)
+  - UP_DOWN: Show both ranges combined (mid + bright events)
+- **Performance Optimized**:
+  - Lookup table operations (~1-2 CPU cycles per pixel)
+  - Single-channel output (1/3 memory bandwidth: 900KB vs 2.7MB)
+  - Early conversion (happens once at source before all processing)
+  - Cache-friendly (256-byte LUT fits in L1 cache)
+- **GA Integration**: Works with Genetic Algorithm optimization when "Use Processed Pixels" is enabled
+- **Grayscale Mode**: Convert output to single-channel grayscale for simpler visualization
+
+**Use Cases**:
+- Isolate specific event intensity ranges for analysis
+- Reduce noise by filtering out unwanted pixel ranges
+- Improve processing performance with 1-bit data representation
+- Focus GA optimization on specific event types (mid-range vs bright)
+
 ### User Interface
 - **ImGui-Based Controls**: Clean, responsive settings panel
 - **Thread-Safe Updates**: Mutex-protected frame generation and camera control
@@ -298,6 +321,30 @@ Reduce sensor resolution to improve performance:
 - Focus on specific sensor area permanently
 - Improve processing speed for real-time applications
 - Reduce USB bandwidth usage
+
+### Binary Stream Processing
+
+Control pixel range filtering for advanced event analysis:
+
+1. **Select Stream Mode**: Use the "Binary Stream Mode" dropdown
+   - **OFF**: No filtering (default 8-bit display)
+   - **DOWN**: Show only mid-range pixels [96-127]
+   - **UP**: Show only bright pixels [224-255]
+   - **UP_DOWN**: Show both mid-range and bright pixels
+2. **Real-Time Display**: Processing applies immediately to live view
+3. **GA Integration**: Enable "Use Processed Pixels" in GA settings to apply filtering during optimization
+
+**Technical Details**:
+- Uses ultra-fast lookup tables for O(1) pixel conversion
+- Reduces memory bandwidth by 66% (single-channel vs BGR)
+- Early conversion happens before all other processing
+- Maintains full compatibility with grayscale mode and GA optimization
+
+**Use Cases**:
+- Isolate specific event types for targeted analysis
+- Reduce computational load with 1-bit data representation
+- Filter noise by excluding unwanted intensity ranges
+- Optimize GA fitness evaluation on specific pixel ranges
 
 ### Keyboard Controls
 
