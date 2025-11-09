@@ -92,38 +92,39 @@ struct GAState {
 // ============================================================================
 
 /**
- * Create lookup table for binary stream conversion
- * Maps pixel values in [range_lower, range_upper] to 255, all others to 0
+ * Create lookup table for BIT extraction (not value ranges)
+ * Maps pixels with specific bit set to 255, all others to 0
  */
-static cv::Mat create_binary_stream_lut(int range_lower, int range_upper) {
+static cv::Mat create_bit_extraction_lut(int bit_position) {
     cv::Mat lut(1, 256, CV_8U);
+    uint8_t mask = (1 << bit_position);
     for (int i = 0; i < 256; i++) {
-        lut.at<uchar>(i) = (i >= range_lower && i <= range_upper) ? 255 : 0;
+        lut.at<uchar>(i) = (i & mask) ? 255 : 0;
     }
     return lut;
 }
 
 // Binary stream lookup tables (initialized once for performance)
-static cv::Mat lut_down;      // Range 3: [96-127] → 255, else → 0
-static cv::Mat lut_up;         // Range 7: [224-255] → 255, else → 0
-static cv::Mat lut_combined;   // Both ranges → 255, else → 0
+static cv::Mat lut_down;      // Bit 3: pixels with bit 3 set → 255, else → 0
+static cv::Mat lut_up;         // Bit 7: pixels with bit 7 set → 255, else → 0
+static cv::Mat lut_combined;   // Bit 3 OR Bit 7 set → 255, else → 0
 static bool luts_initialized = false;
 
 void initialize_binary_stream_luts() {
     if (luts_initialized) return;
 
-    // Down stream: Range 3 [96-127]
-    lut_down = create_binary_stream_lut(96, 127);
+    // Down stream: Bit 3 extraction
+    lut_down = create_bit_extraction_lut(3);
 
-    // Up stream: Range 7 [224-255]
-    lut_up = create_binary_stream_lut(224, 255);
+    // Up stream: Bit 7 extraction
+    lut_up = create_bit_extraction_lut(7);
 
-    // Combined: Both ranges
+    // Combined: Both bits
     lut_combined = cv::Mat(1, 256, CV_8U);
     for (int i = 0; i < 256; i++) {
-        bool in_down = (i >= 96 && i <= 127);
-        bool in_up = (i >= 224 && i <= 255);
-        lut_combined.at<uchar>(i) = (in_down || in_up) ? 255 : 0;
+        bool bit3_set = (i & (1 << 3)) != 0;
+        bool bit7_set = (i & (1 << 7)) != 0;
+        lut_combined.at<uchar>(i) = (bit3_set || bit7_set) ? 255 : 0;
     }
 
     luts_initialized = true;
@@ -133,9 +134,9 @@ void initialize_binary_stream_luts() {
  * Binary stream result - contains BOTH Up and Down images
  */
 struct BinaryStreamResult {
-    cv::Mat up;    // Range 7: [224-255] → 255, else → 0
-    cv::Mat down;  // Range 3: [96-127] → 255, else → 0
-    cv::Mat combined;  // Both ranges combined
+    cv::Mat up;    // Bit 7: pixels with bit 7 set → 255, else → 0
+    cv::Mat down;  // Bit 3: pixels with bit 3 set → 255, else → 0
+    cv::Mat combined;  // Bit 3 OR Bit 7 set → 255, else → 0
 };
 
 /**
@@ -145,6 +146,10 @@ struct BinaryStreamResult {
  * CRITICAL: Event camera frames are grayscale data in BGR format (all channels identical)
  * We extract the BLUE channel directly to preserve original 8-bit values for bit extraction
  * Using weighted BGR→gray conversion (0.114*B + 0.587*G + 0.301*R) destroys the bit data!
+ *
+ * BIT EXTRACTION (not value ranges):
+ * - Down = Bit 3 (value & 8): Extracts pixels with bit 3 set
+ * - Up = Bit 7 (value & 128): Extracts pixels with bit 7 set
  *
  * @param frame Input 8-bit frame (BGR or grayscale)
  * @return BinaryStreamResult with both up and down binary images
@@ -165,15 +170,15 @@ BinaryStreamResult apply_binary_stream_split(const cv::Mat& frame) {
         gray = frame.clone();  // Make a copy to ensure we have ownership
     }
 
-    // ALWAYS generate BOTH Up and Down binary images
+    // ALWAYS generate BOTH Up and Down binary images via bit extraction
     // Explicitly initialize output matrices
     result.down = cv::Mat(gray.size(), CV_8UC1);
     result.up = cv::Mat(gray.size(), CV_8UC1);
     result.combined = cv::Mat(gray.size(), CV_8UC1);
 
-    cv::LUT(gray, lut_down, result.down);      // Range 3: [96-127]
-    cv::LUT(gray, lut_up, result.up);          // Range 7: [224-255]
-    cv::LUT(gray, lut_combined, result.combined);  // Both ranges
+    cv::LUT(gray, lut_down, result.down);      // Bit 3 extraction
+    cv::LUT(gray, lut_up, result.up);          // Bit 7 extraction
+    cv::LUT(gray, lut_combined, result.combined);  // Bit 3 OR Bit 7
 
     return result;
 }
@@ -257,8 +262,8 @@ void store_binary_stream_images(const cv::Mat& frame, int physical_camera_index)
 
         int up_nonzero = cv::countNonZero(result.up);
         int down_nonzero = cv::countNonZero(result.down);
-        std::cout << "  Range [224-255] (Up): " << up_nonzero << " pixels" << std::endl;
-        std::cout << "  Range [96-127] (Down): " << down_nonzero << " pixels" << std::endl;
+        std::cout << "  Bit 7 extracted (Up): " << up_nonzero << " pixels" << std::endl;
+        std::cout << "  Bit 3 extracted (Down): " << down_nonzero << " pixels" << std::endl;
         std::cout << "==============================\n" << std::endl;
     }
 
