@@ -45,7 +45,7 @@ bool AppConfig::load(const std::string& filename) {
         std::cerr << "Config file not found: " << filename << " (using defaults)" << std::endl;
         std::cerr << "Note: Config file should be in the same directory as the executable" << std::endl;
         std::cerr << "  Using default camera bias settings (all 128)" << std::endl;
-        std::cerr << "  Default frame accumulation time: " << camera_settings_.accumulation_time_s << "s" << std::endl;
+        std::cerr << "  Default frame accumulation time: " << camera_settings_.accumulation_time_us << " μs" << std::endl;
         return false;
     }
 
@@ -98,9 +98,9 @@ bool AppConfig::load(const std::string& filename) {
             else if (key == "bias_fo") camera_settings_.bias_fo = std::stoi(value);
             else if (key == "bias_hpf") camera_settings_.bias_hpf = std::stoi(value);
             else if (key == "bias_refr") camera_settings_.bias_refr = std::stoi(value);
-            else if (key == "accumulation_time_s") camera_settings_.accumulation_time_s = std::stof(value);
-            // Backward compatibility: convert microseconds to seconds if old key is used
-            else if (key == "accumulation_time_us") camera_settings_.accumulation_time_s = std::stof(value) / 1000000.0f;
+            else if (key == "accumulation_time_us") camera_settings_.accumulation_time_us = std::stoi(value);
+            // Backward compatibility: convert seconds to microseconds if old key is used
+            else if (key == "accumulation_time_s") camera_settings_.accumulation_time_us = static_cast<int>(std::stof(value) * 1000000.0f);
             else if (key == "capture_directory") camera_settings_.capture_directory = value;
             // Trail Filter settings
             else if (key == "trail_filter_enabled") camera_settings_.trail_filter_enabled = (std::stoi(value) != 0);
@@ -317,7 +317,7 @@ bool AppConfig::load(const std::string& filename) {
 
     std::cout << "Configuration loaded from: " << filename << std::endl;
     std::cout << "  Camera bias settings loaded" << std::endl;
-    std::cout << "  Frame accumulation time: " << camera_settings_.accumulation_time_s << "s" << std::endl;
+    std::cout << "  Frame accumulation time: " << camera_settings_.accumulation_time_us << " μs" << std::endl;
     std::cout << "  GA population size: " << ga_settings_.population_size << std::endl;
     std::cout << "  GA generations: " << ga_settings_.num_generations << std::endl;
 

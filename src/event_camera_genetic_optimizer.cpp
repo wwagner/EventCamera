@@ -22,7 +22,7 @@ EventCameraGeneticOptimizer::Genome::Genome() {
     bias_refr = 0;
     bias_fo = 0;
     bias_hpf = 0;
-    accumulation_time_s = 0.01f;
+    accumulation_time_us = 10000;
     enable_trail_filter = false;
     trail_threshold_us = 10000;
     enable_antiflicker = false;
@@ -59,10 +59,10 @@ void EventCameraGeneticOptimizer::Genome::randomize(mt19937& rng) {
         bias_hpf = hpf_dist(rng);
     }
 
-    // Randomize accumulation time (log-scale for better distribution)
+    // Randomize accumulation time (log-scale for better distribution across wide range)
     if (opt_mask.accumulation) {
-        uniform_real_distribution<float> log_accum_dist(log(0.001f), log(0.1f));
-        accumulation_time_s = exp(log_accum_dist(rng));
+        uniform_real_distribution<float> log_accum_dist(log(100.0f), log(100000.0f));
+        accumulation_time_us = static_cast<int>(exp(log_accum_dist(rng)));
     }
 
     // Trail filter: Always enabled when optimizing, only randomize threshold
@@ -103,7 +103,7 @@ void EventCameraGeneticOptimizer::Genome::clamp() {
     bias_hpf = max(ranges.hpf_min, min(ranges.hpf_max, bias_hpf));
 
     // Clamp accumulation time
-    accumulation_time_s = max(0.001f, min(0.1f, accumulation_time_s));
+    accumulation_time_us = max(100, min(100000, accumulation_time_us));
 
     // Clamp trail filter
     trail_threshold_us = max(ranges.trail_min, min(ranges.trail_max, trail_threshold_us));
@@ -379,8 +379,8 @@ EventCameraGeneticOptimizer::crossover(const Genome& parent1, const Genome& pare
     offspring.bias_fo = coin_flip(rng_) ? parent1.bias_fo : parent2.bias_fo;
     offspring.bias_hpf = coin_flip(rng_) ? parent1.bias_hpf : parent2.bias_hpf;
 
-    offspring.accumulation_time_s = coin_flip(rng_) ?
-        parent1.accumulation_time_s : parent2.accumulation_time_s;
+    offspring.accumulation_time_us = coin_flip(rng_) ?
+        parent1.accumulation_time_us : parent2.accumulation_time_us;
 
     offspring.enable_trail_filter = coin_flip(rng_) ?
         parent1.enable_trail_filter : parent2.enable_trail_filter;
@@ -438,12 +438,12 @@ void EventCameraGeneticOptimizer::mutate(Genome& genome) {
         genome.bias_hpf += static_cast<int>(noise(rng_));
     }
 
-    // Mutate accumulation time (log-space)
+    // Mutate accumulation time (log-space for better distribution across wide range)
     if (genome.opt_mask.accumulation && mutate_dist(rng_)) {
-        float log_val = log(genome.accumulation_time_s);
-        normal_distribution<float> noise(0.0f, params_.mutation_strength * (log(0.1f) - log(0.001f)));
+        float log_val = log(static_cast<float>(genome.accumulation_time_us));
+        normal_distribution<float> noise(0.0f, params_.mutation_strength * (log(100000.0f) - log(100.0f)));
         log_val += noise(rng_);
-        genome.accumulation_time_s = exp(log_val);
+        genome.accumulation_time_us = static_cast<int>(exp(log_val));
     }
 
     // Mutate trail filter threshold only (enable is always true, type is STC_KEEP_TRAIL)
@@ -516,7 +516,7 @@ void EventCameraGeneticOptimizer::log_generation() {
          << " refr=" << setw(3) << best_genome_.bias_refr
          << " fo=" << setw(3) << best_genome_.bias_fo
          << " hpf=" << setw(3) << best_genome_.bias_hpf
-         << " | accum=" << fixed << setprecision(4) << best_genome_.accumulation_time_s
+         << " | accum=" << best_genome_.accumulation_time_us << "us"
          << " | trail=" << (best_genome_.enable_trail_filter ? "ON " : "OFF")
          << (best_genome_.enable_trail_filter ? ("(" + to_string(best_genome_.trail_threshold_us) + "us)") : "     ")
          << " | af=" << (best_genome_.enable_antiflicker ? "ON " : "OFF")
@@ -532,7 +532,7 @@ void EventCameraGeneticOptimizer::log_generation() {
          << " refr=" << setw(3) << worst_genome.bias_refr
          << " fo=" << setw(3) << worst_genome.bias_fo
          << " hpf=" << setw(3) << worst_genome.bias_hpf
-         << " | accum=" << fixed << setprecision(4) << worst_genome.accumulation_time_s
+         << " | accum=" << worst_genome.accumulation_time_us << "us"
          << " | trail=" << (worst_genome.enable_trail_filter ? "ON " : "OFF")
          << (worst_genome.enable_trail_filter ? ("(" + to_string(worst_genome.trail_threshold_us) + "us)") : "     ")
          << " | af=" << (worst_genome.enable_antiflicker ? "ON " : "OFF")
@@ -578,7 +578,7 @@ void EventCameraGeneticOptimizer::save_genome_to_ini(const Genome& genome,
     file << "bias_refr = " << genome.bias_refr << endl;
     file << "bias_fo = " << genome.bias_fo << endl;
     file << "bias_hpf = " << genome.bias_hpf << endl;
-    file << "accumulation_time_s = " << genome.accumulation_time_s << endl;
+    file << "accumulation_time_us = " << genome.accumulation_time_us << endl;
     file << endl;
 
     file << "[EventTrailFilter]" << endl;

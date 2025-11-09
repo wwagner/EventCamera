@@ -35,7 +35,7 @@ public:
         int bias_fo = 0;            // Photoreceptor follower (-35 to 55)
         int bias_hpf = 0;           // High-pass filter (0 to 120)
         int bias_refr = 0;          // Refractory period (-20 to 235)
-        float accumulation_time_s = 0.01f;  // Event accumulation period (0.001-0.05 seconds)
+        int accumulation_time_us = 1000;  // Event accumulation period in microseconds (100-100000 μs)
         std::string capture_directory = "C:\\Users\\wolfw\\OneDrive\\Desktop";  // Directory for saving captured frames
 
         // Trail Filter settings
@@ -250,7 +250,7 @@ public:
         bool optimize_bias_refr = true;
         bool optimize_bias_fo = true;
         bool optimize_bias_hpf = true;
-        bool optimize_accumulation = true;
+        bool optimize_accumulation = false;  // Disabled - requires camera restart
         bool optimize_trail_filter = false;
         bool optimize_antiflicker = false;
         bool optimize_erc = false;

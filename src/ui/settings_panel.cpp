@@ -428,21 +428,26 @@ void SettingsPanel::render_frame_generation() {
     ImGui::Text("Frame Generation");
 
     auto& cam_settings = config_.camera_settings();
-    static float previous_accumulation = cam_settings.accumulation_time_s;
+    static int previous_accumulation = cam_settings.accumulation_time_us;
     bool accumulation_changed = false;
 
     // Mark restart-required settings in orange/yellow
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.2f, 1.0f));  // Orange/yellow color
-    if (ImGui::SliderFloat("Accumulation (s)", &cam_settings.accumulation_time_s,
-                          0.001f, 0.1f, "%.3f")) {
+    ImGui::SetNextItemWidth(150);
+    if (ImGui::InputInt("Accumulation (μs)", &cam_settings.accumulation_time_us, 100, 1000)) {
+        // Clamp to valid range
+        if (cam_settings.accumulation_time_us < 100) cam_settings.accumulation_time_us = 100;
+        if (cam_settings.accumulation_time_us > 100000) cam_settings.accumulation_time_us = 100000;
         accumulation_changed = true;
         settings_changed_ = true;
     }
     ImGui::PopStyleColor();
 
-    ImGui::TextWrapped("Time to accumulate events (lower = more responsive)");
+    ImGui::TextWrapped("Event accumulation period in microseconds (100-100000 μs)");
+    ImGui::TextWrapped("Lower values = more responsive but noisier");
+    ImGui::TextWrapped("Common: 200μs (ultra fast), 10000μs (~100 FPS), 33000μs (~30 FPS)");
 
-    if (cam_settings.accumulation_time_s != previous_accumulation) {
+    if (cam_settings.accumulation_time_us != previous_accumulation) {
         ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Need Restart - Reconnect camera to apply");
     }
 }
@@ -462,7 +467,7 @@ void SettingsPanel::render_apply_button() {
         bias_mgr_.apply_to_camera();
 
         // Reset accumulation time (requires restart to take effect)
-        config_.camera_settings().accumulation_time_s = 0.01f;
+        config_.camera_settings().accumulation_time_us = 1000;
 
         std::cout << "All settings reset to defaults" << std::endl;
     }

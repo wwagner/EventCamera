@@ -6,6 +6,45 @@ All notable changes to the Event Camera Viewer project are documented in this fi
 
 ### Added
 
+#### Accumulation Time Microsecond Precision ⏱️
+
+- **Converted accumulation time from seconds to microseconds**
+  - Changed data type from `float accumulation_time_s` to `int accumulation_time_us`
+  - Range changed from 0.001-0.1s to 100-100000 μs for finer control
+  - Default changed from 33ms to 1000 μs (1 ms)
+  - UI changed from slider to input box with +/- 100 and +/- 1000 step buttons
+  - Modified files: `include/app_config.h`, `event_config.ini`, `src/app_config.cpp`, `src/main.cpp`, `src/ui/settings_panel.cpp`
+  - Updated GA genome structure and all related code
+  - Added comprehensive INI documentation with common values (200μs, 1ms, 10ms, 33ms, 100ms)
+
+#### GPU Selection for Hybrid Graphics 🎮
+
+- **Forced discrete GPU usage on laptops with NVIDIA Optimus / AMD PowerXpress**
+  - Added `NvOptimusEnablement` and `AmdPowerXpressRequestHighPerformance` exports
+  - Application now automatically uses high-performance GPU instead of integrated graphics
+  - Improves rendering and compute shader performance
+  - Location: `src/main.cpp:48-53`
+
+### Changed
+
+- **Removed accumulation time from GA optimization parameters**
+  - Accumulation changes require camera restart, causing interruptions
+  - Removed checkbox from GA parameter selection UI
+  - Set `optimize_accumulation = false` by default in config
+  - GA now optimizes only bias parameters (diff, diff_on, diff_off, refr, fo, hpf) and optional filters
+  - Modified files: `src/main.cpp`, `src/ui/ga_panel.cpp`, `include/app_config.h`, `event_config.ini`
+
+### Fixed
+
+- **Fixed disconnect/reconnect freezing and crashes**
+  - Added 200ms delay after stopping cameras to flush pending event callbacks
+  - Fixed cleanup order: camera manager now resets before frame generators
+  - Prevents "NonMonotonicTimeHigh" timestamp violations
+  - Eliminates segmentation faults during reconnection
+  - Location: `src/main.cpp:1109-1130`
+
+### Added
+
 #### Phase 1 Ultra-Performance Optimizations 🚀
 
 **CRITICAL: 50-80% Performance Improvement** - Comprehensive architecture optimizations targeting the biggest bottlenecks for massive performance gains.

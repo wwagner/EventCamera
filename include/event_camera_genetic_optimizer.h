@@ -36,7 +36,7 @@ public:
         int bias_hpf;               // High-pass filter
 
         // Frame Generation (1 param)
-        float accumulation_time_s;  // 0.001-0.1 seconds
+        int accumulation_time_us;  // 100-100000 microseconds
 
         // Event Trail Filter (2 params)
         bool enable_trail_filter;   // Enable/disable

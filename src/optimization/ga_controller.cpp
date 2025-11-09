@@ -71,7 +71,7 @@ void GAController::apply_best_parameters() {
     cam_settings.bias_refr = clamped_genome.bias_refr;
     cam_settings.bias_fo = clamped_genome.bias_fo;
     cam_settings.bias_hpf = clamped_genome.bias_hpf;
-    cam_settings.accumulation_time_s = clamped_genome.accumulation_time_s;
+    cam_settings.accumulation_time_us = clamped_genome.accumulation_time_us;
 
     // Apply via camera controller
     camera_ctrl_.apply_all_settings();
@@ -115,8 +115,8 @@ EventCameraGeneticOptimizer::Genome GAController::clamp_genome_to_hardware(
     }
 
     // Clamp accumulation time to reasonable range
-    clamped.accumulation_time_s = std::clamp(
-        genome.accumulation_time_s, 0.001f, 0.1f);
+    clamped.accumulation_time_us = std::clamp(
+        genome.accumulation_time_us, 100, 100000);
 
     return clamped;
 }

@@ -47,7 +47,6 @@ void GAPanel::render_info() {
     ImGui::Spacing();
     ImGui::TextWrapped("Parameters to optimize:");
     ImGui::BulletText("Biases: %s", ga_config.optimize_bias_diff ? "Yes" : "No");
-    ImGui::BulletText("Accumulation: %s", ga_config.optimize_accumulation ? "Yes" : "No");
     ImGui::BulletText("Trail filter: %s", ga_config.optimize_trail_filter ? "Yes" : "No");
     ImGui::BulletText("Anti-flicker: %s", ga_config.optimize_antiflicker ? "Yes" : "No");
 

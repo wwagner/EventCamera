@@ -43,6 +43,15 @@
 #include "app_config.h"
 #include "event_camera_genetic_optimizer.h"
 
+// Force usage of discrete GPU on laptops with hybrid graphics (NVIDIA Optimus / AMD PowerXpress)
+// These exports tell Windows to prefer the high-performance GPU instead of integrated graphics
+#ifdef _WIN32
+extern "C" {
+    __declspec(dllexport) unsigned long NvOptimusEnablement = 0x00000001;  // Force NVIDIA GPU
+    __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;    // Force AMD GPU
+}
+#endif
+
 // Camera features
 #include "camera/features/erc_feature.h"
 #include "camera/features/antiflicker_feature.h"
@@ -362,7 +371,7 @@ EventCameraGeneticOptimizer::FitnessResult evaluate_genome_fitness(
         // Update accumulation time
         if (app_state->camera_state().frame_generator()) {
             const uint32_t accumulation_time_us = static_cast<uint32_t>(
-                genome.accumulation_time_s * 1000000);
+                genome.accumulation_time_us);
 
             // PERFORMANCE: Use per-camera mutex (camera 0 for GA)
             std::lock_guard<std::mutex> lock(app_state->camera_state().frame_gen_mutex(0));
@@ -741,7 +750,7 @@ bool try_connect_camera(AppConfig& config, EventCamera::BiasManager& bias_mgr,
 
     // Create frame generators and set up event callbacks for all cameras
     const uint32_t accumulation_time_us = static_cast<uint32_t>(
-        config.camera_settings().accumulation_time_s * 1000000);
+        config.camera_settings().accumulation_time_us);
 
     // num_cameras already defined above from camera initialization
     for (int i = 0; i < num_cameras; ++i) {
@@ -1105,6 +1114,11 @@ int main(int argc, char* argv[]) {
                         std::cerr << "Error stopping camera " << i << ": " << e.what() << std::endl;
                     }
                 }
+
+                // CRITICAL: Wait for all pending callbacks to complete
+                // This prevents timestamp violations and segfaults from in-flight events
+                std::cout << "Waiting for pending callbacks to complete..." << std::endl;
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
             }
 
             // Reset the running flag so camera can start again
@@ -1114,12 +1128,16 @@ int main(int argc, char* argv[]) {
             app_state->feature_manager().shutdown_all();
             app_state->feature_manager().clear();
 
-            // Clear camera resources (frame generators, texture managers, and camera manager)
+            // Clear camera resources - IMPORTANT: Order matters!
+            // 1. Reset camera manager first (closes cameras, stops callbacks)
+            app_state->camera_state().camera_manager().reset();
+
+            // 2. Then reset frame generators and texture managers (no longer receiving callbacks)
             for (int i = 0; i < 2; ++i) {  // MAX_CAMERAS = 2 (one per physical camera)
                 app_state->camera_state().frame_generator(i).reset();
                 app_state->texture_manager(i).reset();
             }
-            app_state->camera_state().camera_manager().reset();
+
             app_state->camera_state().set_connected(false);
 
             std::cout << "Camera disconnected" << std::endl;
@@ -1191,7 +1209,6 @@ int main(int argc, char* argv[]) {
                 ImGui::Checkbox("bias_refr##ga_opt", &ga_cfg.optimize_bias_refr);
                 ImGui::Checkbox("bias_fo##ga_opt", &ga_cfg.optimize_bias_fo); ImGui::SameLine();
                 ImGui::Checkbox("bias_hpf##ga_opt", &ga_cfg.optimize_bias_hpf);
-                ImGui::Checkbox("accumulation##ga_opt", &ga_cfg.optimize_accumulation);
                 ImGui::Checkbox("trail_filter##ga_opt", &ga_cfg.optimize_trail_filter); ImGui::SameLine();
                 ImGui::Checkbox("antiflicker##ga_opt", &ga_cfg.optimize_antiflicker);
                 ImGui::Checkbox("erc##ga_opt", &ga_cfg.optimize_erc);
@@ -1354,7 +1371,7 @@ int main(int argc, char* argv[]) {
                                ga_state.best_genome.bias_refr,
                                ga_state.best_genome.bias_fo,
                                ga_state.best_genome.bias_hpf);
-                    ImGui::Text("Accumulation: %.3f s", ga_state.best_genome.accumulation_time_s);
+                    ImGui::Text("Accumulation: %d us", ga_state.best_genome.accumulation_time_us);
                 }
 
                 if (!ga_state.running && app_state->camera_state().is_connected()) {
@@ -1393,7 +1410,7 @@ int main(int argc, char* argv[]) {
                         config.camera_settings().bias_refr = clamped_genome.bias_refr;
                         config.camera_settings().bias_fo = clamped_genome.bias_fo;
                         config.camera_settings().bias_hpf = clamped_genome.bias_hpf;
-                        config.camera_settings().accumulation_time_s = clamped_genome.accumulation_time_s;
+                        config.camera_settings().accumulation_time_us = clamped_genome.accumulation_time_us;
 
                         // Apply to ALL cameras
                         int num_cameras = app_state->camera_state().num_cameras();
@@ -1613,7 +1630,6 @@ int main(int argc, char* argv[]) {
                 ImGui::Checkbox("bias_refr##ga_opt", &ga_cfg.optimize_bias_refr);
                 ImGui::Checkbox("bias_fo##ga_opt", &ga_cfg.optimize_bias_fo); ImGui::SameLine();
                 ImGui::Checkbox("bias_hpf##ga_opt", &ga_cfg.optimize_bias_hpf);
-                ImGui::Checkbox("accumulation##ga_opt", &ga_cfg.optimize_accumulation);
                 ImGui::Checkbox("trail_filter##ga_opt", &ga_cfg.optimize_trail_filter); ImGui::SameLine();
                 ImGui::Checkbox("antiflicker##ga_opt", &ga_cfg.optimize_antiflicker);
                 ImGui::Checkbox("erc##ga_opt", &ga_cfg.optimize_erc);
@@ -1794,7 +1810,7 @@ int main(int argc, char* argv[]) {
                         config.camera_settings().bias_refr = clamped_genome.bias_refr;
                         config.camera_settings().bias_fo = clamped_genome.bias_fo;
                         config.camera_settings().bias_hpf = clamped_genome.bias_hpf;
-                        config.camera_settings().accumulation_time_s = clamped_genome.accumulation_time_s;
+                        config.camera_settings().accumulation_time_us = clamped_genome.accumulation_time_us;
 
                         int num_cameras = app_state->camera_state().num_cameras();
                         for (int i = 0; i < num_cameras; ++i) {
