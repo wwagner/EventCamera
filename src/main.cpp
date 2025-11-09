@@ -159,14 +159,18 @@ BinaryStreamResult apply_binary_stream_split(const cv::Mat& frame) {
     if (frame.channels() == 3) {
         // Extract blue channel directly (channels are identical for event camera)
         // This preserves the original 8-bit values needed for bit extraction
-        std::vector<cv::Mat> channels(3);
-        cv::split(frame, channels);
-        gray = channels[0];  // Blue channel (same as G and R for grayscale data)
+        gray = cv::Mat(frame.size(), CV_8UC1);
+        cv::extractChannel(frame, gray, 0);  // Channel 0 = Blue
     } else {
-        gray = frame;
+        gray = frame.clone();  // Make a copy to ensure we have ownership
     }
 
     // ALWAYS generate BOTH Up and Down binary images
+    // Explicitly initialize output matrices
+    result.down = cv::Mat(gray.size(), CV_8UC1);
+    result.up = cv::Mat(gray.size(), CV_8UC1);
+    result.combined = cv::Mat(gray.size(), CV_8UC1);
+
     cv::LUT(gray, lut_down, result.down);      // Range 3: [96-127]
     cv::LUT(gray, lut_up, result.up);          // Range 7: [224-255]
     cv::LUT(gray, lut_combined, result.combined);  // Both ranges
@@ -222,6 +226,16 @@ void store_binary_stream_images(const cv::Mat& frame, int physical_camera_index)
 
     // Generate BOTH Up and Down binary images
     BinaryStreamResult result = apply_binary_stream_split(frame);
+
+    // DEBUG: Check what's in the binary images
+    static int debug_counter = 0;
+    if (debug_counter++ % 60 == 0) {  // Print once per second @ 60fps
+        int up_nonzero = cv::countNonZero(result.up);
+        int down_nonzero = cv::countNonZero(result.down);
+        std::cout << "Cam" << physical_camera_index
+                  << " Up pixels: " << up_nonzero
+                  << " Down pixels: " << down_nonzero << std::endl;
+    }
 
     // Convert single-channel to BGR for GPU upload
     cv::Mat up_bgr, down_bgr;
