@@ -227,14 +227,39 @@ void store_binary_stream_images(const cv::Mat& frame, int physical_camera_index)
     // Generate BOTH Up and Down binary images
     BinaryStreamResult result = apply_binary_stream_split(frame);
 
-    // DEBUG: Check what's in the binary images
+    // DEBUG: Analyze bit distribution in the original grayscale frame
     static int debug_counter = 0;
     if (debug_counter++ % 60 == 0) {  // Print once per second @ 60fps
+        // Extract grayscale channel to analyze bit patterns
+        cv::Mat gray;
+        if (frame.channels() == 3) {
+            gray = cv::Mat(frame.size(), CV_8UC1);
+            cv::extractChannel(frame, gray, 0);
+        } else {
+            gray = frame;
+        }
+
+        // Count pixels with each bit set (0-7)
+        int bit_counts[8] = {0};
+        for (int i = 0; i < gray.rows * gray.cols; i++) {
+            uint8_t pixel = gray.data[i];
+            for (int bit = 0; bit < 8; bit++) {
+                if (pixel & (1 << bit)) {
+                    bit_counts[bit]++;
+                }
+            }
+        }
+
+        std::cout << "\n=== Cam" << physical_camera_index << " Bit Distribution ===" << std::endl;
+        for (int bit = 0; bit < 8; bit++) {
+            std::cout << "  Bit " << bit << ": " << bit_counts[bit] << " pixels" << std::endl;
+        }
+
         int up_nonzero = cv::countNonZero(result.up);
         int down_nonzero = cv::countNonZero(result.down);
-        std::cout << "Cam" << physical_camera_index
-                  << " Up pixels: " << up_nonzero
-                  << " Down pixels: " << down_nonzero << std::endl;
+        std::cout << "  Range [224-255] (Up): " << up_nonzero << " pixels" << std::endl;
+        std::cout << "  Range [96-127] (Down): " << down_nonzero << " pixels" << std::endl;
+        std::cout << "==============================\n" << std::endl;
     }
 
     // Convert single-channel to BGR for GPU upload
