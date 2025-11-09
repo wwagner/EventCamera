@@ -1496,7 +1496,7 @@ int main(int argc, char* argv[]) {
 
         // === Settings strips below cameras ===
         float settings_height = window_height - settings_top - 10.0f;
-        float strip_width = (window_width - 5 * cam_spacing) / 4.0f;  // 4 strips
+        float strip_width = (window_width - 6 * cam_spacing) / 5.0f;  // 5 strips
 
         // Strip 1: Analog Biases
         ImGui::SetNextWindowPos(ImVec2(cam_spacing, settings_top), ImGuiCond_FirstUseEver);
@@ -1767,8 +1767,86 @@ int main(int argc, char* argv[]) {
         }
         ImGui::End();
 
-        // Strip 4: Controls
+        // Strip 4: Camera Status
         ImGui::SetNextWindowPos(ImVec2(3 * strip_width + 4 * cam_spacing, settings_top), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(strip_width, settings_height), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Camera Status")) {
+            // Display status for both cameras (left on top, right on bottom)
+            for (int cam_idx = 0; cam_idx < 2; ++cam_idx) {
+                if (cam_idx == 1) {
+                    ImGui::Spacing();
+                    ImGui::Separator();
+                    ImGui::Spacing();
+                }
+
+                const char* cam_label = (cam_idx == 0) ? "Left Camera" : "Right Camera";
+                ImGui::Text("%s", cam_label);
+                ImGui::Separator();
+
+                // Camera info
+                if (app_state->camera_state().is_connected() && app_state->camera_state().camera_manager()) {
+                    if (cam_idx < app_state->camera_state().camera_manager()->num_cameras()) {
+                        auto& cam_info = app_state->camera_state().camera_manager()->get_camera(cam_idx);
+                        ImGui::Text("Serial: %s", cam_info.serial.c_str());
+                    } else {
+                        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Not connected");
+                    }
+                } else {
+                    ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "Mode: SIMULATION");
+                }
+
+                // Resolution
+                int width = app_state->display_settings().get_image_width();
+                int height = app_state->display_settings().get_image_height();
+                ImGui::Text("Resolution: %dx%d", width, height);
+
+                // FPS display
+                ImGuiIO& io = ImGui::GetIO();
+                ImGui::Text("Display FPS: %.1f", io.Framerate);
+
+                // Event rate display
+                int64_t event_rate = app_state->event_metrics().get_events_per_second();
+                if (event_rate > 1000000) {
+                    ImGui::Text("Event rate: %.2f M events/sec", event_rate / 1000000.0f);
+                } else if (event_rate > 1000) {
+                    ImGui::Text("Event rate: %.1f K events/sec", event_rate / 1000.0f);
+                } else {
+                    ImGui::Text("Event rate: %lld events/sec", event_rate);
+                }
+
+                // Frame generation diagnostics
+                int64_t gen = app_state->frame_buffer(cam_idx).get_frames_generated();
+                int64_t drop = app_state->frame_buffer(cam_idx).get_frames_dropped();
+                if (gen > 0) {
+                    float drop_rate = (drop * 100.0f) / gen;
+                    ImGui::Text("Frames: %lld gen, %lld drop (%.1f%%)", gen, drop, drop_rate);
+                }
+
+                // Event latency
+                int64_t event_ts = app_state->event_metrics().get_last_event_timestamp();
+                int64_t cam_start = app_state->camera_state().get_camera_start_time_us();
+                if (event_ts > 0 && cam_start > 0) {
+                    auto now = std::chrono::steady_clock::now();
+                    auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
+                    int64_t event_system_ts = cam_start + event_ts;
+                    float event_latency_ms = (now_us - event_system_ts) / 1000.0f;
+                    ImGui::Text("Event latency: %.1f ms", event_latency_ms);
+                }
+
+                // Frame display latency
+                auto now = std::chrono::steady_clock::now();
+                auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
+                int64_t frame_sys_ts = app_state->frame_sync(cam_idx).get_last_frame_system_ts();
+                if (frame_sys_ts > 0) {
+                    float frame_latency_ms = (now_us - frame_sys_ts) / 1000.0f;
+                    ImGui::Text("Frame latency: %.1f ms", frame_latency_ms);
+                }
+            }
+        }
+        ImGui::End();
+
+        // Strip 5: Controls
+        ImGui::SetNextWindowPos(ImVec2(4 * strip_width + 5 * cam_spacing, settings_top), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(ImVec2(strip_width, settings_height), ImGuiCond_FirstUseEver);
         if (ImGui::Begin("Controls")) {
             // Connection buttons
@@ -1785,12 +1863,6 @@ int main(int argc, char* argv[]) {
             if (ImGui::Button("Capture Frame", ImVec2(-1, 0))) {
                 settings_panel.capture_frame();
             }
-
-            ImGui::Spacing();
-            ImGui::Separator();
-            ImGui::Spacing();
-
-            settings_panel.render_connection_controls();
 
             ImGui::Spacing();
             ImGui::Separator();
