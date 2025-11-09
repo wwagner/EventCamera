@@ -6,6 +6,25 @@ All notable changes to the Event Camera Viewer project are documented in this fi
 
 ### Added
 
+#### User Interface Improvements
+
+- **Five-Panel Layout**: Enhanced UI organization with dedicated camera status panel
+  - Changed from 4-panel to 5-panel layout for better information organization
+  - New panel structure:
+    1. Analog Biases (Strip 1)
+    2. Digital Filters (Strip 2)
+    3. Genetic Optimization (Strip 3)
+    4. Camera Status - NEW (Strip 4)
+    5. Controls (Strip 5 - moved from Strip 4)
+  - **Dual Camera Status Display**:
+    - Left camera status on top, right camera status on bottom
+    - Per-camera metrics: Serial number, resolution, display FPS, event rate
+    - Frame generation statistics (generated/dropped/percentage)
+    - Event latency and frame display latency monitoring
+    - Separate monitoring for independent camera performance analysis
+  - Strip width automatically calculated: `(window_width - 6*spacing) / 5.0`
+  - Location: `src/main.cpp:1499, 1770-1846`
+
 #### Genetic Algorithm Improvements
 
 - **Parameter Selection System**: Full control over which parameters to optimize
