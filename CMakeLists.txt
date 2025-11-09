@@ -81,6 +81,7 @@ add_executable(event_camera_viewer
     src/video/texture_manager.cpp
     src/video/triple_buffer_renderer.cpp
     src/video/simd_utils.cpp
+    src/video/gpu_compute.cpp
     src/video/filters/roi_filter.cpp
     src/video/filters/subtraction_filter.cpp
     # Camera module (hardware features)
