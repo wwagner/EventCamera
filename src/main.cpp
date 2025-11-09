@@ -295,6 +295,7 @@ video::FrameRef combine_camera_frames() {
 
 /**
  * Upload OpenCV frame to OpenGL texture (ZERO-COPY optimized)
+ * Binary stream images are already processed and ready for display
  */
 void upload_frame_to_gpu(int camera_index) {
     if (!app_state) return;
@@ -307,19 +308,13 @@ void upload_frame_to_gpu(int camera_index) {
 
     video::FrameRef frame_ref = frame_opt.value();
 
-    // Get writable access only if we need to modify
-    if (camera_index == 1 && app_state->display_settings().get_flip_second_view()) {
-        cv::Mat& frame = frame_ref.write();  // Copy-on-write if shared
-        cv::flip(frame, frame, 1);  // 1 = flip horizontally
-    }
-
-    // Process frame through filter pipeline
-    // TODO: Update frame_processor to use FrameRef for full zero-copy
+    // Binary stream images are already fully processed - upload directly
+    // No need to apply frame_processor (ROI, subtraction, etc.) again
     video::ReadGuard guard(frame_ref);
-    cv::Mat processed_frame = app_state->frame_processor().process(guard.get());
+    const cv::Mat& frame = guard.get();
 
     // Upload to GPU texture
-    app_state->texture_manager(camera_index).upload_frame(processed_frame);
+    app_state->texture_manager(camera_index).upload_frame(frame);
 }
 
 /**
