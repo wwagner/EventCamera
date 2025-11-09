@@ -130,7 +130,45 @@ void initialize_binary_stream_luts() {
 }
 
 /**
- * Apply binary stream mode conversion (early 1-bit conversion)
+ * Binary stream result - contains BOTH Up and Down images
+ */
+struct BinaryStreamResult {
+    cv::Mat up;    // Range 7: [224-255] → 255, else → 0
+    cv::Mat down;  // Range 3: [96-127] → 255, else → 0
+    cv::Mat combined;  // Both ranges combined
+};
+
+/**
+ * Apply binary stream conversion - ALWAYS generates BOTH Up and Down images
+ * This is the FIRST processing step - happens before all other processing
+ *
+ * @param frame Input 8-bit frame (BGR or grayscale)
+ * @return BinaryStreamResult with both up and down binary images
+ */
+BinaryStreamResult apply_binary_stream_split(const cv::Mat& frame) {
+    BinaryStreamResult result;
+
+    initialize_binary_stream_luts();
+
+    // Convert to single-channel grayscale if needed (SIMD-accelerated)
+    cv::Mat gray;
+    if (frame.channels() == 3) {
+        gray = cv::Mat(frame.size(), CV_8UC1);
+        video::simd::bgr_to_gray(frame, gray);  // 7.5× faster than cvtColor
+    } else {
+        gray = frame;
+    }
+
+    // ALWAYS generate BOTH Up and Down binary images
+    cv::LUT(gray, lut_down, result.down);      // Range 3: [96-127]
+    cv::LUT(gray, lut_up, result.up);          // Range 7: [224-255]
+    cv::LUT(gray, lut_combined, result.combined);  // Both ranges
+
+    return result;
+}
+
+/**
+ * Apply binary stream mode conversion (legacy single-output version)
  * This is the FIRST processing step - happens before all other processing
  *
  * @param frame Input 8-bit frame (BGR or grayscale)
@@ -145,28 +183,16 @@ cv::Mat apply_binary_stream_mode(const cv::Mat& frame,
         return frame;  // Pass through unchanged (8-bit)
     }
 
-    initialize_binary_stream_luts();
+    // Use the split version to get both images
+    BinaryStreamResult result = apply_binary_stream_split(frame);
 
-    // Convert to single-channel grayscale if needed (SIMD-accelerated)
-    cv::Mat gray;
-    if (frame.channels() == 3) {
-        gray = cv::Mat(frame.size(), CV_8UC1);
-        video::simd::bgr_to_gray(frame, gray);  // 7.5× faster than cvtColor
-    } else {
-        gray = frame;
-    }
-
-    // Apply LUT for ultra-fast 1-bit conversion
-    cv::Mat binary_1bit;
+    // Return the requested mode
     switch (mode) {
-        case Mode::DOWN:    cv::LUT(gray, lut_down, binary_1bit); break;
-        case Mode::UP:      cv::LUT(gray, lut_up, binary_1bit); break;
-        case Mode::UP_DOWN: cv::LUT(gray, lut_combined, binary_1bit); break;
-        default: binary_1bit = gray; break;
+        case Mode::DOWN:    return result.down;
+        case Mode::UP:      return result.up;
+        case Mode::UP_DOWN: return result.combined;
+        default: return frame;
     }
-
-    // Return as single-channel (most efficient)
-    return binary_1bit;
 }
 
 // ============================================================================
@@ -178,6 +204,30 @@ cv::Mat apply_binary_stream_mode(const cv::Mat& frame,
 void update_texture(const cv::Mat& frame, int camera_index) {
     if (frame.empty() || !app_state) return;
     app_state->frame_buffer(camera_index).store_frame(frame);
+}
+
+/**
+ * Store both Up and Down binary stream images for a camera
+ * Maps: Camera 0 Up=0, Down=1, Camera 1 Up=2, Down=3
+ */
+void store_binary_stream_images(const cv::Mat& frame, int physical_camera_index) {
+    if (frame.empty() || !app_state) return;
+
+    // Generate BOTH Up and Down binary images
+    BinaryStreamResult result = apply_binary_stream_split(frame);
+
+    // Convert single-channel to BGR for GPU upload
+    cv::Mat up_bgr, down_bgr;
+    cv::cvtColor(result.up, up_bgr, cv::COLOR_GRAY2BGR);
+    cv::cvtColor(result.down, down_bgr, cv::COLOR_GRAY2BGR);
+
+    // Map to buffer indices: Cam0 Up=0, Down=1, Cam1 Up=2, Down=3
+    int up_index = physical_camera_index * 2;
+    int down_index = physical_camera_index * 2 + 1;
+
+    // Store in separate buffers
+    app_state->frame_buffer(up_index).store_frame(up_bgr);
+    app_state->frame_buffer(down_index).store_frame(down_bgr);
 }
 
 // Static storage for last combined frame to avoid flickering
@@ -758,24 +808,6 @@ bool try_connect_camera(AppConfig& config, EventCamera::BiasManager& bias_mgr,
             [camera_index](const Metavision::timestamp ts, cv::Mat& frame) {
                 if (frame.empty() || !app_state) return;
 
-                // *** STEP 1: EARLY BINARY STREAM CONVERSION ***
-                // This happens FIRST - convert 8-bit to 1-bit based on range selection
-                auto stream_mode = app_state->display_settings().get_binary_stream_mode();
-                frame = apply_binary_stream_mode(frame, stream_mode);
-
-                // *** STEP 2: Optional grayscale (SIMD-accelerated) ***
-                // NOTE: If stream mode is ON, frame is already single-channel, so this only applies if OFF
-                if (app_state->display_settings().get_grayscale_mode() && frame.channels() == 3) {
-                    cv::Mat gray(frame.size(), CV_8UC1);
-                    video::simd::bgr_to_gray(frame, gray);  // 7.5× faster
-                    cv::cvtColor(gray, frame, cv::COLOR_GRAY2BGR);
-                }
-
-                // *** STEP 3: Convert to BGR for GPU upload if needed ***
-                if (frame.channels() == 1) {
-                    cv::cvtColor(frame, frame, cv::COLOR_GRAY2BGR);
-                }
-
                 // Rate limit display updates to target FPS (per-camera)
                 auto now = std::chrono::steady_clock::now();
                 auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
@@ -785,7 +817,10 @@ bool try_connect_camera(AppConfig& config, EventCamera::BiasManager& bias_mgr,
                 if (app_state->frame_sync(camera_index).should_display_frame(now_us, fps_target)) {
                     app_state->frame_sync(camera_index).on_frame_generated(ts, now_us);
                     app_state->frame_sync(camera_index).on_frame_displayed(now_us);
-                    update_texture(frame, camera_index);  // Uses FrameBuffer which handles dropping
+
+                    // Generate and store BOTH Up and Down binary stream images
+                    // This replaces the old single-output approach
+                    store_binary_stream_images(frame, camera_index);
                 }
                 // Note: frame_buffer tracks its own dropped/generated statistics
             });
@@ -1127,8 +1162,10 @@ int main(int argc, char* argv[]) {
             app_state->feature_manager().clear();
 
             // Clear camera resources (frame generators, texture managers, and camera manager)
-            for (int i = 0; i < 2; ++i) {  // MAX_CAMERAS = 2
-                app_state->camera_state().frame_generator(i).reset();
+            for (int i = 0; i < 4; ++i) {  // MAX_CAMERAS = 4 (2 physical cameras × 2 binary streams)
+                if (i < 2) {
+                    app_state->camera_state().frame_generator(i).reset();
+                }
                 app_state->texture_manager(i).reset();
             }
             app_state->camera_state().camera_manager().reset();
@@ -1482,15 +1519,19 @@ int main(int argc, char* argv[]) {
             settings_top = combined_height + 20.0f;
 
         } else {
-            // === SEPARATE VIEW MODE: Two camera windows side-by-side ===
+            // === SEPARATE VIEW MODE: 2x2 Grid for binary stream images ===
+            // Top row: Camera 0 Up (left) | Camera 0 Down (right)
+            // Bottom row: Camera 1 Up (left) | Camera 1 Down (right)
 
-            // Camera 0 (Left)
+            float row_spacing = single_cam_height + 10.0f;
+
+            // Camera 0 Up (Top Left)
             if (num_cameras > 0) {
                 ImGui::SetNextWindowPos(ImVec2(cam_spacing, cam_spacing), ImGuiCond_FirstUseEver);
                 ImGui::SetNextWindowSize(ImVec2(single_cam_width, single_cam_height), ImGuiCond_FirstUseEver);
 
-                if (ImGui::Begin("Camera 0")) {
-                    upload_frame_to_gpu(0);
+                if (ImGui::Begin("Camera 0 Up")) {
+                    upload_frame_to_gpu(0);  // Index 0 = Camera 0 Up
 
                     if (app_state->texture_manager(0).get_texture_id() != 0) {
                         ImVec2 window_size = ImGui::GetContentRegionAvail();
@@ -1508,19 +1549,19 @@ int main(int argc, char* argv[]) {
                         ImGui::Image((void*)(intptr_t)app_state->texture_manager(0).get_texture_id(),
                                    ImVec2(display_width, display_height));
                     } else {
-                        ImGui::Text("Waiting for camera 0 frames...");
+                        ImGui::Text("Waiting for camera 0 Up frames...");
                     }
                 }
                 ImGui::End();
             }
 
-            // Camera 1 (Right)
-            if (num_cameras > 1) {
+            // Camera 0 Down (Top Right)
+            if (num_cameras > 0) {
                 ImGui::SetNextWindowPos(ImVec2(single_cam_width + 2 * cam_spacing, cam_spacing), ImGuiCond_FirstUseEver);
                 ImGui::SetNextWindowSize(ImVec2(single_cam_width, single_cam_height), ImGuiCond_FirstUseEver);
 
-                if (ImGui::Begin("Camera 1")) {
-                    upload_frame_to_gpu(1);
+                if (ImGui::Begin("Camera 0 Down")) {
+                    upload_frame_to_gpu(1);  // Index 1 = Camera 0 Down
 
                     if (app_state->texture_manager(1).get_texture_id() != 0) {
                         ImVec2 window_size = ImGui::GetContentRegionAvail();
@@ -1538,11 +1579,74 @@ int main(int argc, char* argv[]) {
                         ImGui::Image((void*)(intptr_t)app_state->texture_manager(1).get_texture_id(),
                                    ImVec2(display_width, display_height));
                     } else {
-                        ImGui::Text("Waiting for camera 1 frames...");
+                        ImGui::Text("Waiting for camera 0 Down frames...");
                     }
                 }
                 ImGui::End();
             }
+
+            // Camera 1 Up (Bottom Left)
+            if (num_cameras > 1) {
+                ImGui::SetNextWindowPos(ImVec2(cam_spacing, row_spacing + cam_spacing), ImGuiCond_FirstUseEver);
+                ImGui::SetNextWindowSize(ImVec2(single_cam_width, single_cam_height), ImGuiCond_FirstUseEver);
+
+                if (ImGui::Begin("Camera 1 Up")) {
+                    upload_frame_to_gpu(2);  // Index 2 = Camera 1 Up
+
+                    if (app_state->texture_manager(2).get_texture_id() != 0) {
+                        ImVec2 window_size = ImGui::GetContentRegionAvail();
+
+                        // Maintain aspect ratio
+                        float aspect = static_cast<float>(app_state->texture_manager(2).get_width()) / app_state->texture_manager(2).get_height();
+                        float display_width = window_size.x;
+                        float display_height = display_width / aspect;
+
+                        if (display_height > window_size.y) {
+                            display_height = window_size.y;
+                            display_width = display_height * aspect;
+                        }
+
+                        ImGui::Image((void*)(intptr_t)app_state->texture_manager(2).get_texture_id(),
+                                   ImVec2(display_width, display_height));
+                    } else {
+                        ImGui::Text("Waiting for camera 1 Up frames...");
+                    }
+                }
+                ImGui::End();
+            }
+
+            // Camera 1 Down (Bottom Right)
+            if (num_cameras > 1) {
+                ImGui::SetNextWindowPos(ImVec2(single_cam_width + 2 * cam_spacing, row_spacing + cam_spacing), ImGuiCond_FirstUseEver);
+                ImGui::SetNextWindowSize(ImVec2(single_cam_width, single_cam_height), ImGuiCond_FirstUseEver);
+
+                if (ImGui::Begin("Camera 1 Down")) {
+                    upload_frame_to_gpu(3);  // Index 3 = Camera 1 Down
+
+                    if (app_state->texture_manager(3).get_texture_id() != 0) {
+                        ImVec2 window_size = ImGui::GetContentRegionAvail();
+
+                        // Maintain aspect ratio
+                        float aspect = static_cast<float>(app_state->texture_manager(3).get_width()) / app_state->texture_manager(3).get_height();
+                        float display_width = window_size.x;
+                        float display_height = display_width / aspect;
+
+                        if (display_height > window_size.y) {
+                            display_height = window_size.y;
+                            display_width = display_height * aspect;
+                        }
+
+                        ImGui::Image((void*)(intptr_t)app_state->texture_manager(3).get_texture_id(),
+                                   ImVec2(display_width, display_height));
+                    } else {
+                        ImGui::Text("Waiting for camera 1 Down frames...");
+                    }
+                }
+                ImGui::End();
+            }
+
+            // Update settings_top to account for 2 rows of cameras
+            settings_top = row_spacing + single_cam_height + 20.0f;
         }
 
         // === Settings strips below cameras ===

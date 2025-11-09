@@ -115,7 +115,8 @@ public:
     void reset_running_flag();
 
 private:
-    static constexpr int MAX_CAMERAS = 2;
+    // 4 streams total: 2 cameras × 2 binary images (Up + Down)
+    static constexpr int MAX_CAMERAS = 4;
     std::atomic<bool> running_{true};
 
     // Subsystem instances
