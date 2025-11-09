@@ -142,6 +142,10 @@ struct BinaryStreamResult {
  * Apply binary stream conversion - ALWAYS generates BOTH Up and Down images
  * This is the FIRST processing step - happens before all other processing
  *
+ * CRITICAL: Event camera frames are grayscale data in BGR format (all channels identical)
+ * We extract the BLUE channel directly to preserve original 8-bit values for bit extraction
+ * Using weighted BGR→gray conversion (0.114*B + 0.587*G + 0.301*R) destroys the bit data!
+ *
  * @param frame Input 8-bit frame (BGR or grayscale)
  * @return BinaryStreamResult with both up and down binary images
  */
@@ -150,11 +154,14 @@ BinaryStreamResult apply_binary_stream_split(const cv::Mat& frame) {
 
     initialize_binary_stream_luts();
 
-    // Convert to single-channel grayscale if needed (SIMD-accelerated)
+    // Extract single channel with ORIGINAL 8-bit values preserved
     cv::Mat gray;
     if (frame.channels() == 3) {
-        gray = cv::Mat(frame.size(), CV_8UC1);
-        video::simd::bgr_to_gray(frame, gray);  // 7.5× faster than cvtColor
+        // Extract blue channel directly (channels are identical for event camera)
+        // This preserves the original 8-bit values needed for bit extraction
+        std::vector<cv::Mat> channels(3);
+        cv::split(frame, channels);
+        gray = channels[0];  // Blue channel (same as G and R for grayscale data)
     } else {
         gray = frame;
     }
