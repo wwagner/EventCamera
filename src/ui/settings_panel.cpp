@@ -371,32 +371,56 @@ void SettingsPanel::render_display_settings() {
 
     ImGui::Spacing();
 
-    // Grayscale mode toggle
-    bool grayscale = state_.display_settings().get_grayscale_mode();
-    if (ImGui::Checkbox("Grayscale Output", &grayscale)) {
-        state_.display_settings().set_grayscale_mode(grayscale);
-        std::cout << "Grayscale mode " << (grayscale ? "enabled" : "disabled") << std::endl;
-    }
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Convert BGR to true single-channel grayscale");
-    }
+    // Dual bit processing configuration
+    ImGui::Text("Dual Bit Processing (applies to both cameras):");
 
-    // Binary stream mode selector
-    ImGui::Text("Binary Stream Mode (early 1-bit conversion):");
+    // First bit selector (0-7 only, no "All bits")
     auto current_mode = state_.display_settings().get_binary_stream_mode();
-    int mode_index = static_cast<int>(current_mode);
+    int mode_index = static_cast<int>(current_mode);  // Direct mapping: BIT_0=0, BIT_1=1, etc.
 
-    const char* stream_modes[] = { "OFF (8-bit)", "Down [96-127]", "Up [224-255]", "Up+Down Combined" };
-    if (ImGui::Combo("Stream Mode", &mode_index, stream_modes, 4)) {
+    const char* bit_modes[] = { "Bit 0", "Bit 1", "Bit 2", "Bit 3", "Bit 4", "Bit 5", "Bit 6", "Bit 7" };
+    if (ImGui::Combo("Bit Selector 1", &mode_index, bit_modes, 8)) {
         state_.display_settings().set_binary_stream_mode(
             static_cast<core::DisplaySettings::BinaryStreamMode>(mode_index));
-        std::cout << "Binary stream mode set to: " << stream_modes[mode_index] << std::endl;
+        std::cout << "Bit selector 1 set to: " << bit_modes[mode_index] << std::endl;
     }
     if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Converts 8-bit stream to 1-bit early in pipeline:\n"
-                         "Down = Range 3 [96-127]\n"
-                         "Up = Range 7 [224-255]\n"
-                         "Up+Down = Both ranges combined");
+        ImGui::SetTooltip("First bit to extract (0-7) - extracted early in pipeline");
+    }
+
+    // Second bit selector (0-7 only)
+    auto current_mode_2 = state_.display_settings().get_binary_stream_mode_2();
+    int mode_index_2 = static_cast<int>(current_mode_2);
+
+    if (ImGui::Combo("Bit Selector 2", &mode_index_2, bit_modes, 8)) {
+        state_.display_settings().set_binary_stream_mode_2(
+            static_cast<core::DisplaySettings::BinaryStreamMode>(mode_index_2));
+        std::cout << "Bit selector 2 set to: " << bit_modes[mode_index_2] << std::endl;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Second bit to extract (0-7) - extracted early in pipeline");
+    }
+
+    // Display mode selector
+    auto current_display_mode = state_.display_settings().get_display_mode();
+    int display_mode_index = static_cast<int>(current_display_mode);
+
+    const char* display_modes[] = {
+        "OR data before processing and display combined",
+        "OR data after processing and display combined",
+        "Display first bit",
+        "Display second bit"
+    };
+    if (ImGui::Combo("Display Mode", &display_mode_index, display_modes, 4)) {
+        state_.display_settings().set_display_mode(
+            static_cast<core::DisplaySettings::DisplayMode>(display_mode_index));
+        std::cout << "Display mode set to: " << display_modes[display_mode_index] << std::endl;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("How to combine/display the two 1-bit arrays:\n"
+                         "OR before = Combine first, process as one\n"
+                         "OR after = Process separately, combine at display\n"
+                         "Display first/second = Show only one bit");
     }
 }
 
@@ -519,18 +543,23 @@ void SettingsPanel::render_digital_features() {
     Metavision::I_ErcModule* erc = cam_info.camera->get_device().get_facility<Metavision::I_ErcModule>();
     if (erc) {
         if (ImGui::TreeNode("Event Rate Controller (ERC)")) {
-            static bool erc_enabled = false;
-            static int erc_rate_kev = 1000;
+            static bool erc_enabled = config_.camera_settings().erc_enabled;
+            static int erc_rate_kev = config_.camera_settings().erc_rate_kev;
             static bool erc_initialized = false;
 
             if (!erc_initialized) {
+                // Verify camera matches config
                 try {
-                    uint32_t current_rate = erc->get_cd_event_rate();
-                    erc_rate_kev = current_rate / 1000;
-                    std::cout << "ERC: Synced with hardware - current rate: " << current_rate << " ev/s" << std::endl;
+                    bool camera_enabled = erc->is_enabled();
+                    uint32_t camera_rate = erc->get_cd_event_rate();
+                    if (camera_enabled != erc_enabled || (camera_rate / 1000) != erc_rate_kev) {
+                        std::cout << "ERC: Camera state differs from config. Config will override." << std::endl;
+                        std::cout << "  Config: " << (erc_enabled ? "enabled" : "disabled") << ", " << erc_rate_kev << " kev/s" << std::endl;
+                        std::cout << "  Camera: " << (camera_enabled ? "enabled" : "disabled") << ", " << (camera_rate / 1000) << " kev/s" << std::endl;
+                    }
                     erc_initialized = true;
                 } catch (const std::exception& e) {
-                    std::cerr << "ERC: Could not read initial state: " << e.what() << std::endl;
+                    std::cerr << "Failed to verify ERC state: " << e.what() << std::endl;
                     erc_initialized = true;
                 }
             }
@@ -575,11 +604,41 @@ void SettingsPanel::render_digital_features() {
     Metavision::I_AntiFlickerModule* antiflicker = cam_info.camera->get_device().get_facility<Metavision::I_AntiFlickerModule>();
     if (antiflicker) {
         if (ImGui::TreeNode("Anti-Flicker Filter")) {
-            static bool af_enabled = false;
-            static int af_mode = 0;
-            static int af_low_freq = 100;
-            static int af_high_freq = 150;
-            static int af_duty_cycle = 50;
+            static bool af_enabled = config_.camera_settings().antiflicker_enabled;
+            static int af_mode = config_.camera_settings().antiflicker_band_mode;
+            static int af_low_freq = config_.camera_settings().antiflicker_low_freq;
+            static int af_high_freq = config_.camera_settings().antiflicker_high_freq;
+            static int af_duty_cycle = config_.camera_settings().antiflicker_duty_cycle;
+            static bool af_initialized = false;
+
+            if (!af_initialized) {
+                // Verify camera matches config
+                try {
+                    bool camera_enabled = antiflicker->is_enabled();
+                    auto camera_mode = antiflicker->get_filtering_mode();
+                    int camera_mode_idx = (camera_mode == Metavision::I_AntiFlickerModule::BAND_STOP) ? 0 : 1;
+
+                    uint32_t camera_low, camera_high;
+                    antiflicker->get_frequency_band(camera_low, camera_high);
+                    uint32_t camera_duty = antiflicker->get_duty_cycle();
+
+                    if (camera_enabled != af_enabled || camera_mode_idx != af_mode ||
+                        camera_low != af_low_freq || camera_high != af_high_freq ||
+                        camera_duty != af_duty_cycle) {
+                        std::cout << "Anti-Flicker: Camera state differs from config. Config will override." << std::endl;
+                        std::cout << "  Config: " << (af_enabled ? "enabled" : "disabled")
+                                  << ", mode=" << af_mode << ", freq=[" << af_low_freq << "," << af_high_freq << "]Hz"
+                                  << ", duty=" << af_duty_cycle << "%" << std::endl;
+                        std::cout << "  Camera: " << (camera_enabled ? "enabled" : "disabled")
+                                  << ", mode=" << camera_mode_idx << ", freq=[" << camera_low << "," << camera_high << "]Hz"
+                                  << ", duty=" << camera_duty << "%" << std::endl;
+                    }
+                    af_initialized = true;
+                } catch (const std::exception& e) {
+                    std::cerr << "Failed to verify Anti-Flicker state: " << e.what() << std::endl;
+                    af_initialized = true;
+                }
+            }
 
             ImGui::TextWrapped("Filter out flicker from artificial lighting (50/60Hz)");
             ImGui::Spacing();
@@ -672,9 +731,40 @@ void SettingsPanel::render_digital_features() {
     Metavision::I_EventTrailFilterModule* trail_filter = cam_info.camera->get_device().get_facility<Metavision::I_EventTrailFilterModule>();
     if (trail_filter) {
         if (ImGui::TreeNode("Event Trail Filter")) {
-            static bool etf_enabled = false;
-            static int etf_type = 0;
-            static int etf_threshold = 10000;
+            static bool etf_enabled = config_.camera_settings().trail_filter_enabled;
+            static int etf_type = config_.camera_settings().trail_filter_type;
+            static int etf_threshold = config_.camera_settings().trail_filter_threshold;
+            static bool etf_initialized = false;
+
+            if (!etf_initialized) {
+                // Verify camera matches config
+                try {
+                    bool camera_enabled = trail_filter->is_enabled();
+                    uint32_t camera_threshold = trail_filter->get_threshold();
+                    auto camera_type = trail_filter->get_type();
+                    int camera_type_idx = 0;
+                    if (camera_type == Metavision::I_EventTrailFilterModule::Type::TRAIL) {
+                        camera_type_idx = 0;
+                    } else if (camera_type == Metavision::I_EventTrailFilterModule::Type::STC_CUT_TRAIL) {
+                        camera_type_idx = 1;
+                    } else if (camera_type == Metavision::I_EventTrailFilterModule::Type::STC_KEEP_TRAIL) {
+                        camera_type_idx = 2;
+                    }
+
+                    if (camera_enabled != etf_enabled || camera_type_idx != etf_type ||
+                        camera_threshold != etf_threshold) {
+                        std::cout << "Trail Filter: Camera state differs from config. Config will override." << std::endl;
+                        std::cout << "  Config: " << (etf_enabled ? "enabled" : "disabled")
+                                  << ", type=" << etf_type << ", threshold=" << etf_threshold << "μs" << std::endl;
+                        std::cout << "  Camera: " << (camera_enabled ? "enabled" : "disabled")
+                                  << ", type=" << camera_type_idx << ", threshold=" << camera_threshold << "μs" << std::endl;
+                    }
+                    etf_initialized = true;
+                } catch (const std::exception& e) {
+                    std::cerr << "Failed to verify Trail Filter state: " << e.what() << std::endl;
+                    etf_initialized = true;
+                }
+            }
 
             ImGui::TextWrapped("Filter noise from event bursts and rapid flickering");
             ImGui::Spacing();

@@ -20,11 +20,18 @@ bool TrailFilterFeature::initialize(Metavision::Camera& camera) {
         uint32_t min_thresh = trail_filter_->get_min_supported_threshold();
         uint32_t max_thresh = trail_filter_->get_max_supported_threshold();
 
-        // Set default threshold
-        threshold_us_ = std::min(10000, (int)max_thresh);
+        // Read current camera state (which was set from config in main.cpp)
+        enabled_ = trail_filter_->is_enabled();
+        threshold_us_ = trail_filter_->get_threshold();
+        auto camera_type = trail_filter_->get_type();
+        filter_type_ = (camera_type == Metavision::I_EventTrailFilterModule::Type::TRAIL) ? 0 :
+                       (camera_type == Metavision::I_EventTrailFilterModule::Type::STC_CUT_TRAIL) ? 1 : 2;
 
         std::cout << "TrailFilterFeature: Initialized (threshold range: " << min_thresh
                  << " - " << max_thresh << " μs)" << std::endl;
+        std::cout << "  Camera state: " << (enabled_ ? "enabled" : "disabled")
+                 << ", type=" << filter_type_
+                 << ", threshold=" << threshold_us_ << "μs" << std::endl;
     } catch (const std::exception& e) {
         std::cerr << "TrailFilterFeature: Warning during initialization: " << e.what() << std::endl;
     }
@@ -58,6 +65,29 @@ void TrailFilterFeature::shutdown() {
 void TrailFilterFeature::enable(bool enabled) {
     if (all_trail_filters_.empty()) return;
 
+    std::cout << "\n=== Trail Filter Toggle ===" << std::endl;
+    std::cout << "Changing enabled state from " << (enabled_ ? "ON" : "OFF")
+              << " to " << (enabled ? "ON" : "OFF") << std::endl;
+    std::cout << "Current settings: type=" << filter_type_
+              << ", threshold=" << threshold_us_ << "μs" << std::endl;
+
+    // Query camera state BEFORE change
+    for (size_t i = 0; i < all_trail_filters_.size(); ++i) {
+        try {
+            bool camera_enabled = all_trail_filters_[i]->is_enabled();
+            uint32_t camera_threshold = all_trail_filters_[i]->get_threshold();
+            auto camera_type = all_trail_filters_[i]->get_type();
+            int camera_type_idx = (camera_type == Metavision::I_EventTrailFilterModule::Type::TRAIL) ? 0 :
+                                  (camera_type == Metavision::I_EventTrailFilterModule::Type::STC_CUT_TRAIL) ? 1 : 2;
+            std::cout << "  Camera " << i << " BEFORE: "
+                     << (camera_enabled ? "enabled" : "disabled")
+                     << ", type=" << camera_type_idx
+                     << ", threshold=" << camera_threshold << "μs" << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "  Camera " << i << " BEFORE: Failed to query state: " << e.what() << std::endl;
+        }
+    }
+
     enabled_ = enabled;
 
     std::cout << "Event Trail Filter " << (enabled_ ? "enabling" : "disabling")
@@ -72,6 +102,24 @@ void TrailFilterFeature::enable(bool enabled) {
                      << ": " << e.what() << std::endl;
         }
     }
+
+    // Query camera state AFTER change
+    for (size_t i = 0; i < all_trail_filters_.size(); ++i) {
+        try {
+            bool camera_enabled = all_trail_filters_[i]->is_enabled();
+            uint32_t camera_threshold = all_trail_filters_[i]->get_threshold();
+            auto camera_type = all_trail_filters_[i]->get_type();
+            int camera_type_idx = (camera_type == Metavision::I_EventTrailFilterModule::Type::TRAIL) ? 0 :
+                                  (camera_type == Metavision::I_EventTrailFilterModule::Type::STC_CUT_TRAIL) ? 1 : 2;
+            std::cout << "  Camera " << i << " AFTER: "
+                     << (camera_enabled ? "enabled" : "disabled")
+                     << ", type=" << camera_type_idx
+                     << ", threshold=" << camera_threshold << "μs" << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "  Camera " << i << " AFTER: Failed to query state: " << e.what() << std::endl;
+        }
+    }
+    std::cout << "==========================\n" << std::endl;
 }
 
 void TrailFilterFeature::apply_settings() {
@@ -117,6 +165,26 @@ void TrailFilterFeature::set_type(Metavision::I_EventTrailFilterModule::Type typ
 void TrailFilterFeature::set_threshold(uint32_t threshold_us) {
     threshold_us_ = threshold_us;
     apply_settings();
+}
+
+void TrailFilterFeature::sync_from_camera() {
+    if (!trail_filter_) return;
+
+    try {
+        // Read current camera state
+        enabled_ = trail_filter_->is_enabled();
+        threshold_us_ = trail_filter_->get_threshold();
+        auto camera_type = trail_filter_->get_type();
+        filter_type_ = (camera_type == Metavision::I_EventTrailFilterModule::Type::TRAIL) ? 0 :
+                       (camera_type == Metavision::I_EventTrailFilterModule::Type::STC_CUT_TRAIL) ? 1 : 2;
+
+        std::cout << "TrailFilterFeature: Synced from camera - "
+                 << (enabled_ ? "enabled" : "disabled")
+                 << ", type=" << filter_type_
+                 << ", threshold=" << threshold_us_ << "μs" << std::endl;
+    } catch (const std::exception& e) {
+        std::cerr << "TrailFilterFeature: Failed to sync from camera: " << e.what() << std::endl;
+    }
 }
 
 bool TrailFilterFeature::render_ui() {

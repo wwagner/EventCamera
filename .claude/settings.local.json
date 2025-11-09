@@ -5,7 +5,10 @@
       "Bash(taskkill:*)",
       "Bash(git commit:*)",
       "Bash(powershell -Command:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(nul)",
+      "Bash(start /B event_camera_viewer.exe)",
+      "Bash(timeout:*)"
     ],
     "deny": [],
     "ask": []

@@ -44,6 +44,11 @@ public:
      */
     void set_threshold(uint32_t threshold_us);
 
+    /**
+     * @brief Sync internal state from camera (call after external config changes)
+     */
+    void sync_from_camera();
+
 private:
     Metavision::I_EventTrailFilterModule* trail_filter_ = nullptr;  // Primary camera for reading capabilities
     std::vector<Metavision::I_EventTrailFilterModule*> all_trail_filters_;  // All cameras to control

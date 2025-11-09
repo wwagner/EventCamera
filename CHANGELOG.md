@@ -404,6 +404,14 @@ All notable changes to the Event Camera Viewer project are documented in this fi
 ### Fixed
 
 #### Critical Bug Fixes
+- **Trail Filter State Inconsistency** (Configuration Initialization):
+  - Problem: Toggling trail filter ON then OFF resulted in different noise levels than startup
+  - Root Cause: TrailFilterFeature initialized with hardcoded `filter_type_=0` (TRAIL) before config applied `type=2` (STC_KEEP_TRAIL)
+  - Solution: Added `sync_from_camera()` method to sync UI state from camera after config is applied
+  - Added comprehensive toggle logging to track all trail filter state changes
+  - Modified files: `include/camera/features/trail_filter_feature.h`, `src/camera/features/trail_filter_feature.cpp`, `src/main.cpp`
+  - Impact: Trail filter now maintains consistent behavior across toggle operations
+
 - **Accumulation Slider Crash** (Race Condition):
   - Problem: UI thread destroying frame_gen while event thread using it
   - Solution: Mutex-protected frame generator access

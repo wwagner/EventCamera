@@ -104,112 +104,15 @@ static cv::Mat create_bit_extraction_lut(int bit_position) {
     return lut;
 }
 
-// Binary stream lookup tables (initialized once for performance)
-static cv::Mat lut_down;      // Bit 3: pixels with bit 3 set → 255, else → 0
-static cv::Mat lut_up;         // Bit 7: pixels with bit 7 set → 255, else → 0
-static cv::Mat lut_combined;   // Bit 3 OR Bit 7 set → 255, else → 0
-static bool luts_initialized = false;
-
-void initialize_binary_stream_luts() {
-    if (luts_initialized) return;
-
-    // Down stream: Bit 3 extraction
-    lut_down = create_bit_extraction_lut(3);
-
-    // Up stream: Bit 7 extraction
-    lut_up = create_bit_extraction_lut(7);
-
-    // Combined: Both bits
-    lut_combined = cv::Mat(1, 256, CV_8U);
-    for (int i = 0; i < 256; i++) {
-        bool bit3_set = (i & (1 << 3)) != 0;
-        bool bit7_set = (i & (1 << 7)) != 0;
-        lut_combined.at<uchar>(i) = (bit3_set || bit7_set) ? 255 : 0;
-    }
-
-    luts_initialized = true;
-}
-
-/**
- * Binary stream result - contains BOTH Up and Down images
- */
-struct BinaryStreamResult {
-    cv::Mat up;    // Bit 7: pixels with bit 7 set → 255, else → 0
-    cv::Mat down;  // Bit 3: pixels with bit 3 set → 255, else → 0
-    cv::Mat combined;  // Bit 3 OR Bit 7 set → 255, else → 0
+// Dual 1-bit array storage (extracted early in pipeline)
+// Storage for 2 cameras, each with 2 bits
+struct DualBitStorage {
+    cv::Mat bit1;  // First extracted bit (1-bit binary)
+    cv::Mat bit2;  // Second extracted bit (1-bit binary)
 };
+static DualBitStorage dual_bit_arrays[2];  // Index 0 = Camera 0, Index 1 = Camera 1
 
-/**
- * Apply binary stream conversion - ALWAYS generates BOTH Up and Down images
- * This is the FIRST processing step - happens before all other processing
- *
- * CRITICAL: Event camera frames are grayscale data in BGR format (all channels identical)
- * We extract the BLUE channel directly to preserve original 8-bit values for bit extraction
- * Using weighted BGR→gray conversion (0.114*B + 0.587*G + 0.301*R) destroys the bit data!
- *
- * BIT EXTRACTION (not value ranges):
- * - Down = Bit 3 (value & 8): Extracts pixels with bit 3 set
- * - Up = Bit 7 (value & 128): Extracts pixels with bit 7 set
- *
- * @param frame Input 8-bit frame (BGR or grayscale)
- * @return BinaryStreamResult with both up and down binary images
- */
-BinaryStreamResult apply_binary_stream_split(const cv::Mat& frame) {
-    BinaryStreamResult result;
-
-    initialize_binary_stream_luts();
-
-    // Extract single channel with ORIGINAL 8-bit values preserved
-    cv::Mat gray;
-    if (frame.channels() == 3) {
-        // Extract blue channel directly (channels are identical for event camera)
-        // This preserves the original 8-bit values needed for bit extraction
-        gray = cv::Mat(frame.size(), CV_8UC1);
-        cv::extractChannel(frame, gray, 0);  // Channel 0 = Blue
-    } else {
-        gray = frame.clone();  // Make a copy to ensure we have ownership
-    }
-
-    // ALWAYS generate BOTH Up and Down binary images via bit extraction
-    // Explicitly initialize output matrices
-    result.down = cv::Mat(gray.size(), CV_8UC1);
-    result.up = cv::Mat(gray.size(), CV_8UC1);
-    result.combined = cv::Mat(gray.size(), CV_8UC1);
-
-    cv::LUT(gray, lut_down, result.down);      // Bit 3 extraction
-    cv::LUT(gray, lut_up, result.up);          // Bit 7 extraction
-    cv::LUT(gray, lut_combined, result.combined);  // Bit 3 OR Bit 7
-
-    return result;
-}
-
-/**
- * Apply binary stream mode conversion (legacy single-output version)
- * This is the FIRST processing step - happens before all other processing
- *
- * @param frame Input 8-bit frame (BGR or grayscale)
- * @param mode Binary stream mode (OFF/DOWN/UP/UP_DOWN)
- * @return Processed frame (single-channel 1-bit if mode != OFF)
- */
-cv::Mat apply_binary_stream_mode(const cv::Mat& frame,
-                                  core::DisplaySettings::BinaryStreamMode mode) {
-    using Mode = core::DisplaySettings::BinaryStreamMode;
-
-    if (mode == Mode::OFF) {
-        return frame;  // Pass through unchanged (8-bit)
-    }
-
-    // Use the split version to get both images
-    BinaryStreamResult result = apply_binary_stream_split(frame);
-
-    // Return the requested mode
-    switch (mode) {
-        case Mode::DOWN:    return result.down;
-        case Mode::UP:      return result.up;
-        case Mode::UP_DOWN: return result.combined;
-        default: return frame;
-    }
-}
+// Old functions removed - now using dynamic bit extraction with user-selected bit positions
 
 // ============================================================================
 
@@ -223,62 +126,80 @@ void update_texture(const cv::Mat& frame, int camera_index) {
 }
 
 /**
- * Store both Up and Down binary stream images for a camera
- * Maps: Camera 0 Up=0, Down=1, Camera 1 Up=2, Down=3
+ * EARLY BIT EXTRACTION: Extract both selected bits from incoming frame
+ * Works on 1-bit arrays throughout pipeline for maximum efficiency
+ * Only converts to 8-bit BGR at the very end for display
  */
-void store_binary_stream_images(const cv::Mat& frame, int physical_camera_index) {
+void store_bit_extracted_image(const cv::Mat& frame, int camera_index) {
     if (frame.empty() || !app_state) return;
 
-    // Generate BOTH Up and Down binary images
-    BinaryStreamResult result = apply_binary_stream_split(frame);
-
-    // DEBUG: Analyze bit distribution in the original grayscale frame
-    static int debug_counter = 0;
-    if (debug_counter++ % 60 == 0) {  // Print once per second @ 60fps
-        // Extract grayscale channel to analyze bit patterns
-        cv::Mat gray;
-        if (frame.channels() == 3) {
-            gray = cv::Mat(frame.size(), CV_8UC1);
-            cv::extractChannel(frame, gray, 0);
-        } else {
-            gray = frame;
-        }
-
-        // Count pixels with each bit set (0-7)
-        int bit_counts[8] = {0};
-        for (int i = 0; i < gray.rows * gray.cols; i++) {
-            uint8_t pixel = gray.data[i];
-            for (int bit = 0; bit < 8; bit++) {
-                if (pixel & (1 << bit)) {
-                    bit_counts[bit]++;
-                }
-            }
-        }
-
-        std::cout << "\n=== Cam" << physical_camera_index << " Bit Distribution ===" << std::endl;
-        for (int bit = 0; bit < 8; bit++) {
-            std::cout << "  Bit " << bit << ": " << bit_counts[bit] << " pixels" << std::endl;
-        }
-
-        int up_nonzero = cv::countNonZero(result.up);
-        int down_nonzero = cv::countNonZero(result.down);
-        std::cout << "  Bit 7 extracted (Up): " << up_nonzero << " pixels" << std::endl;
-        std::cout << "  Bit 3 extracted (Down): " << down_nonzero << " pixels" << std::endl;
-        std::cout << "==============================\n" << std::endl;
+    // === STEP 1: EARLY BIT EXTRACTION (at source) ===
+    // Extract grayscale channel (preserves original 8-bit values)
+    cv::Mat gray;
+    if (frame.channels() == 3) {
+        gray = cv::Mat(frame.size(), CV_8UC1);
+        cv::extractChannel(frame, gray, 0);  // Use channel 0 to preserve exact values
+    } else {
+        gray = frame;  // Already single-channel
     }
 
-    // Convert single-channel to BGR for GPU upload
-    cv::Mat up_bgr, down_bgr;
-    cv::cvtColor(result.up, up_bgr, cv::COLOR_GRAY2BGR);
-    cv::cvtColor(result.down, down_bgr, cv::COLOR_GRAY2BGR);
+    // Get user-selected bit positions
+    int bit1_pos = static_cast<int>(app_state->display_settings().get_binary_stream_mode());
+    int bit2_pos = static_cast<int>(app_state->display_settings().get_binary_stream_mode_2());
 
-    // Map to buffer indices: Cam0 Up=0, Down=1, Cam1 Up=2, Down=3
-    int up_index = physical_camera_index * 2;
-    int down_index = physical_camera_index * 2 + 1;
+    // Extract BOTH bits using LUT (O(1) per pixel)
+    cv::Mat lut1 = create_bit_extraction_lut(bit1_pos);
+    cv::Mat lut2 = create_bit_extraction_lut(bit2_pos);
 
-    // Store in separate buffers
-    app_state->frame_buffer(up_index).store_frame(up_bgr);
-    app_state->frame_buffer(down_index).store_frame(down_bgr);
+    cv::Mat bit1(gray.size(), CV_8UC1);  // 1-bit binary (stored as 0 or 255 in CV_8UC1)
+    cv::Mat bit2(gray.size(), CV_8UC1);  // 1-bit binary
+
+    cv::LUT(gray, lut1, bit1);
+    cv::LUT(gray, lut2, bit2);
+
+    // Store the extracted 1-bit arrays for this camera
+    dual_bit_arrays[camera_index].bit1 = bit1;
+    dual_bit_arrays[camera_index].bit2 = bit2;
+
+    // === STEP 2: PROCESS 1-BIT ARRAYS BASED ON DISPLAY MODE ===
+    auto display_mode = app_state->display_settings().get_display_mode();
+    cv::Mat final_binary;  // Final 1-bit result
+
+    using DisplayMode = core::DisplaySettings::DisplayMode;
+
+    switch (display_mode) {
+        case DisplayMode::OR_BEFORE_PROCESSING:
+            // OR the bits FIRST, then process the combined 1-bit array
+            cv::bitwise_or(bit1, bit2, final_binary);
+            // TODO: Add processing pipeline here (GA, filters, etc.)
+            break;
+
+        case DisplayMode::OR_AFTER_PROCESSING:
+            // Process BOTH bits separately, then OR at the end
+            // TODO: Add processing for bit1
+            // TODO: Add processing for bit2
+            cv::bitwise_or(bit1, bit2, final_binary);
+            break;
+
+        case DisplayMode::DISPLAY_BIT_1:
+            // Only process and display first bit
+            final_binary = bit1;
+            // TODO: Add processing pipeline here
+            break;
+
+        case DisplayMode::DISPLAY_BIT_2:
+            // Only process and display second bit
+            final_binary = bit2;
+            // TODO: Add processing pipeline here
+            break;
+    }
+
+    // === STEP 3: CONVERT 1-BIT TO 8-BIT BGR FOR DISPLAY (FINAL STEP) ===
+    cv::Mat display_frame;
+    cv::cvtColor(final_binary, display_frame, cv::COLOR_GRAY2BGR);
+
+    // Store final BGR frame in buffer for display
+    app_state->frame_buffer(camera_index).store_frame(display_frame);
 }
 
 // Static storage for last combined frame to avoid flickering
@@ -460,25 +381,9 @@ EventCameraGeneticOptimizer::FitnessResult evaluate_genome_fitness(
                     ga_state.ga_frame_buffer.store_frame(frame_ref);  // Zero-copy share
                 }
 
-                // Apply display processing (for display only, not for GA capture)
-                // Copy-on-write only if we actually modify the frame
+                // Display processing now handled by store_bit_extracted_image()
+                // which does early bit extraction and works on 1-bit arrays
                 cv::Mat display_frame = frame_ref.write();
-
-                // *** STEP 1: EARLY BINARY STREAM CONVERSION ***
-                auto stream_mode = app_state->display_settings().get_binary_stream_mode();
-                display_frame = apply_binary_stream_mode(display_frame, stream_mode);
-
-                // *** STEP 2: Optional grayscale (SIMD-accelerated) ***
-                if (app_state->display_settings().get_grayscale_mode() && display_frame.channels() == 3) {
-                    cv::Mat gray(display_frame.size(), CV_8UC1);
-                    video::simd::bgr_to_gray(display_frame, gray);  // 7.5× faster
-                    cv::cvtColor(gray, display_frame, cv::COLOR_GRAY2BGR);
-                }
-
-                // *** STEP 3: Convert to BGR if single-channel ***
-                if (display_frame.channels() == 1) {
-                    cv::cvtColor(display_frame, display_frame, cv::COLOR_GRAY2BGR);
-                }
 
                 // Rate limit display updates to target FPS (GA uses camera 0)
                 auto now = std::chrono::steady_clock::now();
@@ -565,15 +470,12 @@ EventCameraGeneticOptimizer::FitnessResult evaluate_genome_fitness(
     result.num_valid_frames = captured_frames.size();
     result.total_frames = num_frames;
 
-    // Apply binary stream processing to all GA frames
-    // This converts frames to single-bit based on the selected stream mode
+    // Convert all GA frames to grayscale for GPU processing
+    // (Binary stream processing now done early in store_bit_extracted_image())
     std::vector<cv::Mat> grayscale_frames;
     grayscale_frames.reserve(captured_frames.size());
 
     for (auto& frame : captured_frames) {
-        auto stream_mode = static_cast<core::DisplaySettings::BinaryStreamMode>(config.ga_settings().ga_binary_stream_mode);
-        frame = apply_binary_stream_mode(frame, stream_mode);
-
         // Convert to grayscale for GPU processing
         cv::Mat gray;
         if (frame.channels() == 3) {
@@ -831,6 +733,12 @@ bool try_connect_camera(AppConfig& config, EventCamera::BiasManager& bias_mgr,
         }
     }
 
+    // Sync TrailFilterFeature with camera state after config is applied
+    if (auto trail_feature = std::dynamic_pointer_cast<EventCamera::TrailFilterFeature>(
+            app_state->feature_manager().get_feature("Trail Filter"))) {
+        trail_feature->sync_from_camera();
+    }
+
     // Create frame generators and set up event callbacks for all cameras
     const uint32_t accumulation_time_us = static_cast<uint32_t>(
         config.camera_settings().accumulation_time_s * 1000000);
@@ -864,9 +772,8 @@ bool try_connect_camera(AppConfig& config, EventCamera::BiasManager& bias_mgr,
                     app_state->frame_sync(camera_index).on_frame_generated(ts, now_us);
                     app_state->frame_sync(camera_index).on_frame_displayed(now_us);
 
-                    // Generate and store BOTH Up and Down binary stream images
-                    // This replaces the old single-output approach
-                    store_binary_stream_images(frame, camera_index);
+                    // Extract selected bit and store for display
+                    store_bit_extracted_image(frame, camera_index);
                 }
                 // Note: frame_buffer tracks its own dropped/generated statistics
             });
@@ -1208,10 +1115,8 @@ int main(int argc, char* argv[]) {
             app_state->feature_manager().clear();
 
             // Clear camera resources (frame generators, texture managers, and camera manager)
-            for (int i = 0; i < 4; ++i) {  // MAX_CAMERAS = 4 (2 physical cameras × 2 binary streams)
-                if (i < 2) {
-                    app_state->camera_state().frame_generator(i).reset();
-                }
+            for (int i = 0; i < 2; ++i) {  // MAX_CAMERAS = 2 (one per physical camera)
+                app_state->camera_state().frame_generator(i).reset();
                 app_state->texture_manager(i).reset();
             }
             app_state->camera_state().camera_manager().reset();
@@ -1565,19 +1470,17 @@ int main(int argc, char* argv[]) {
             settings_top = combined_height + 20.0f;
 
         } else {
-            // === SEPARATE VIEW MODE: 2x2 Grid for binary stream images ===
-            // Top row: Camera 0 Up (left) | Camera 0 Down (right)
-            // Bottom row: Camera 1 Up (left) | Camera 1 Down (right)
+            // === SEPARATE VIEW MODE: Two camera windows side-by-side ===
+            // Camera 0 (Left) | Camera 1 (Right)
+            // Bit selection from dropdown applies to both cameras
 
-            float row_spacing = single_cam_height + 10.0f;
-
-            // Camera 0 Up (Top Left)
+            // Camera 0 (Left)
             if (num_cameras > 0) {
                 ImGui::SetNextWindowPos(ImVec2(cam_spacing, cam_spacing), ImGuiCond_FirstUseEver);
                 ImGui::SetNextWindowSize(ImVec2(single_cam_width, single_cam_height), ImGuiCond_FirstUseEver);
 
-                if (ImGui::Begin("Camera 0 Up")) {
-                    upload_frame_to_gpu(0);  // Index 0 = Camera 0 Up
+                if (ImGui::Begin("Camera 0")) {
+                    upload_frame_to_gpu(0);  // Index 0 = Camera 0
 
                     if (app_state->texture_manager(0).get_texture_id() != 0) {
                         ImVec2 window_size = ImGui::GetContentRegionAvail();
@@ -1595,19 +1498,19 @@ int main(int argc, char* argv[]) {
                         ImGui::Image((void*)(intptr_t)app_state->texture_manager(0).get_texture_id(),
                                    ImVec2(display_width, display_height));
                     } else {
-                        ImGui::Text("Waiting for camera 0 Up frames...");
+                        ImGui::Text("Waiting for camera 0 frames...");
                     }
                 }
                 ImGui::End();
             }
 
-            // Camera 0 Down (Top Right)
-            if (num_cameras > 0) {
+            // Camera 1 (Right)
+            if (num_cameras > 1) {
                 ImGui::SetNextWindowPos(ImVec2(single_cam_width + 2 * cam_spacing, cam_spacing), ImGuiCond_FirstUseEver);
                 ImGui::SetNextWindowSize(ImVec2(single_cam_width, single_cam_height), ImGuiCond_FirstUseEver);
 
-                if (ImGui::Begin("Camera 0 Down")) {
-                    upload_frame_to_gpu(1);  // Index 1 = Camera 0 Down
+                if (ImGui::Begin("Camera 1")) {
+                    upload_frame_to_gpu(1);  // Index 1 = Camera 1
 
                     if (app_state->texture_manager(1).get_texture_id() != 0) {
                         ImVec2 window_size = ImGui::GetContentRegionAvail();
@@ -1625,74 +1528,14 @@ int main(int argc, char* argv[]) {
                         ImGui::Image((void*)(intptr_t)app_state->texture_manager(1).get_texture_id(),
                                    ImVec2(display_width, display_height));
                     } else {
-                        ImGui::Text("Waiting for camera 0 Down frames...");
+                        ImGui::Text("Waiting for camera 1 frames...");
                     }
                 }
                 ImGui::End();
             }
 
-            // Camera 1 Up (Bottom Left)
-            if (num_cameras > 1) {
-                ImGui::SetNextWindowPos(ImVec2(cam_spacing, row_spacing + cam_spacing), ImGuiCond_FirstUseEver);
-                ImGui::SetNextWindowSize(ImVec2(single_cam_width, single_cam_height), ImGuiCond_FirstUseEver);
-
-                if (ImGui::Begin("Camera 1 Up")) {
-                    upload_frame_to_gpu(2);  // Index 2 = Camera 1 Up
-
-                    if (app_state->texture_manager(2).get_texture_id() != 0) {
-                        ImVec2 window_size = ImGui::GetContentRegionAvail();
-
-                        // Maintain aspect ratio
-                        float aspect = static_cast<float>(app_state->texture_manager(2).get_width()) / app_state->texture_manager(2).get_height();
-                        float display_width = window_size.x;
-                        float display_height = display_width / aspect;
-
-                        if (display_height > window_size.y) {
-                            display_height = window_size.y;
-                            display_width = display_height * aspect;
-                        }
-
-                        ImGui::Image((void*)(intptr_t)app_state->texture_manager(2).get_texture_id(),
-                                   ImVec2(display_width, display_height));
-                    } else {
-                        ImGui::Text("Waiting for camera 1 Up frames...");
-                    }
-                }
-                ImGui::End();
-            }
-
-            // Camera 1 Down (Bottom Right)
-            if (num_cameras > 1) {
-                ImGui::SetNextWindowPos(ImVec2(single_cam_width + 2 * cam_spacing, row_spacing + cam_spacing), ImGuiCond_FirstUseEver);
-                ImGui::SetNextWindowSize(ImVec2(single_cam_width, single_cam_height), ImGuiCond_FirstUseEver);
-
-                if (ImGui::Begin("Camera 1 Down")) {
-                    upload_frame_to_gpu(3);  // Index 3 = Camera 1 Down
-
-                    if (app_state->texture_manager(3).get_texture_id() != 0) {
-                        ImVec2 window_size = ImGui::GetContentRegionAvail();
-
-                        // Maintain aspect ratio
-                        float aspect = static_cast<float>(app_state->texture_manager(3).get_width()) / app_state->texture_manager(3).get_height();
-                        float display_width = window_size.x;
-                        float display_height = display_width / aspect;
-
-                        if (display_height > window_size.y) {
-                            display_height = window_size.y;
-                            display_width = display_height * aspect;
-                        }
-
-                        ImGui::Image((void*)(intptr_t)app_state->texture_manager(3).get_texture_id(),
-                                   ImVec2(display_width, display_height));
-                    } else {
-                        ImGui::Text("Waiting for camera 1 Down frames...");
-                    }
-                }
-                ImGui::End();
-            }
-
-            // Update settings_top to account for 2 rows of cameras
-            settings_top = row_spacing + single_cam_height + 20.0f;
+            // Update settings_top to account for 1 row of cameras
+            settings_top = single_cam_height + 20.0f;
         }
 
         // === Settings strips below cameras ===

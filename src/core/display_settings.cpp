@@ -55,4 +55,20 @@ DisplaySettings::BinaryStreamMode DisplaySettings::get_binary_stream_mode() cons
     return static_cast<BinaryStreamMode>(binary_stream_mode_.load());
 }
 
+void DisplaySettings::set_binary_stream_mode_2(BinaryStreamMode mode) {
+    binary_stream_mode_2_.store(static_cast<int>(mode));
+}
+
+DisplaySettings::BinaryStreamMode DisplaySettings::get_binary_stream_mode_2() const {
+    return static_cast<BinaryStreamMode>(binary_stream_mode_2_.load());
+}
+
+void DisplaySettings::set_display_mode(DisplayMode mode) {
+    display_mode_.store(static_cast<int>(mode));
+}
+
+DisplaySettings::DisplayMode DisplaySettings::get_display_mode() const {
+    return static_cast<DisplayMode>(display_mode_.load());
+}
+
 } // namespace core

@@ -87,26 +87,64 @@ public:
     bool get_grayscale_mode() const;
 
     /**
-     * Binary stream modes for early 1-bit conversion
+     * Bit selection mode for bit extraction (0-7 only)
      */
     enum class BinaryStreamMode {
-        OFF = 0,        // No binary conversion (8-bit passthrough)
-        DOWN = 1,       // Range 3 [96-127] only
-        UP = 2,         // Range 7 [224-255] only
-        UP_DOWN = 3     // Both ranges combined
+        BIT_0 = 0,      // Extract bit 0 only
+        BIT_1 = 1,      // Extract bit 1 only
+        BIT_2 = 2,      // Extract bit 2 only
+        BIT_3 = 3,      // Extract bit 3 only
+        BIT_4 = 4,      // Extract bit 4 only
+        BIT_5 = 5,      // Extract bit 5 only
+        BIT_6 = 6,      // Extract bit 6 only
+        BIT_7 = 7       // Extract bit 7 only
     };
 
     /**
-     * Set binary stream mode
-     * @param mode Stream mode (OFF, DOWN, UP, UP_DOWN)
+     * Display mode for dual bit processing
+     */
+    enum class DisplayMode {
+        OR_BEFORE_PROCESSING = 0,  // OR bits before processing, display combined
+        OR_AFTER_PROCESSING = 1,   // Process separately, OR after, display combined
+        DISPLAY_BIT_1 = 2,         // Display only first bit selector result
+        DISPLAY_BIT_2 = 3          // Display only second bit selector result
+    };
+
+    /**
+     * Set binary stream mode (first bit selector)
+     * @param mode Stream mode (ALL_BITS or BIT_0 through BIT_7)
      */
     void set_binary_stream_mode(BinaryStreamMode mode);
 
     /**
-     * Get binary stream mode
+     * Get binary stream mode (first bit selector)
      * @return Current stream mode
      */
     BinaryStreamMode get_binary_stream_mode() const;
+
+    /**
+     * Set second binary stream mode (second bit selector)
+     * @param mode Stream mode (ALL_BITS or BIT_0 through BIT_7)
+     */
+    void set_binary_stream_mode_2(BinaryStreamMode mode);
+
+    /**
+     * Get second binary stream mode (second bit selector)
+     * @return Current stream mode for second selector
+     */
+    BinaryStreamMode get_binary_stream_mode_2() const;
+
+    /**
+     * Set display mode (how to combine/display dual bits)
+     * @param mode Display mode selection
+     */
+    void set_display_mode(DisplayMode mode);
+
+    /**
+     * Get display mode
+     * @return Current display mode
+     */
+    DisplayMode get_display_mode() const;
 
 private:
     std::atomic<int> target_display_fps_{10};
@@ -115,7 +153,9 @@ private:
     std::atomic<bool> add_images_mode_{false};
     std::atomic<bool> flip_second_view_{false};
     std::atomic<bool> grayscale_mode_{false};
-    std::atomic<int> binary_stream_mode_{0};  // BinaryStreamMode as int (default: OFF)
+    std::atomic<int> binary_stream_mode_{0};  // BinaryStreamMode as int (default: BIT_0)
+    std::atomic<int> binary_stream_mode_2_{7};  // Second bit selector (default: BIT_7)
+    std::atomic<int> display_mode_{0};  // DisplayMode as int (default: OR_BEFORE_PROCESSING)
 };
 
 } // namespace core
