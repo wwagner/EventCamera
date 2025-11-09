@@ -816,6 +816,22 @@ void SettingsPanel::render_digital_features() {
 void SettingsPanel::render_genetic_algorithm() {
     auto& ga_cfg = config_.ga_settings();
 
+    // Binary stream mode selector for GA - at the top
+    ImGui::Text("Binary Stream Mode:");
+    const char* stream_modes[] = { "Down", "Up", "Up + Down" };
+    int current_mode = ga_cfg.ga_binary_stream_mode - 1; // Convert from 1-indexed to 0-indexed
+    if (ImGui::Combo("##ga_stream_mode", &current_mode, stream_modes, 3)) {
+        ga_cfg.ga_binary_stream_mode = current_mode + 1; // Convert back to 1-indexed
+        settings_changed_ = true;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Binary stream mode for GA fitness evaluation:\nDown = Range [96-127]\nUp = Range [224-255]\nUp + Down = Both ranges combined");
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
     // Connected component fitness evaluation
     ImGui::Text("Connected Component Fitness Evaluation:");
     ImGui::Spacing();
@@ -837,25 +853,6 @@ void SettingsPanel::render_genetic_algorithm() {
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("Target radius for connected pixel groups (guideline - larger clusters are rewarded)");
         }
-
-        ImGui::Spacing();
-
-        // Use processed pixels checkbox
-        if (ImGui::Checkbox("Use Processed Pixels", &ga_cfg.use_processed_pixels)) {
-            settings_changed_ = true;
-        }
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Apply grayscale and binary stream processing to frames before fitness evaluation");
-        }
-
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
-
-        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.0f, 1.0f),
-                          "Tip: GA automatically finds and grows connected");
-        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.0f, 1.0f),
-                          "pixel groups to match target radius.");
 
         ImGui::Unindent();
     }

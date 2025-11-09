@@ -260,6 +260,7 @@ public:
         int cluster_radius = 2;             // Target radius for connected components (pixels, 1-50)
         int min_cluster_radius = 2;         // Minimum radius for noise filtering (pixels, 1-5)
         bool use_processed_pixels = false;  // Apply display processing (grayscale + binary threshold) before fitness evaluation
+        int ga_binary_stream_mode = 3;      // Binary stream mode for GA: 1=DOWN, 2=UP, 3=UP_DOWN (maps to DisplaySettings::BinaryStreamMode)
         std::vector<std::pair<int, int>> cluster_centers; // DEPRECATED: No longer used with connected components
     };
 

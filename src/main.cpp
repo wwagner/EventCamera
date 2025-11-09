@@ -448,24 +448,15 @@ EventCameraGeneticOptimizer::FitnessResult evaluate_genome_fitness(
     result.num_valid_frames = captured_frames.size();
     result.total_frames = num_frames;
 
-    // Apply display processing to frames if requested
-    if (config.ga_settings().use_processed_pixels && app_state) {
-        for (auto& frame : captured_frames) {
-            // *** STEP 1: EARLY BINARY STREAM CONVERSION ***
-            auto stream_mode = app_state->display_settings().get_binary_stream_mode();
-            frame = apply_binary_stream_mode(frame, stream_mode);
+    // Apply binary stream processing to all GA frames
+    // This converts frames to single-bit based on the selected stream mode
+    for (auto& frame : captured_frames) {
+        auto stream_mode = static_cast<core::DisplaySettings::BinaryStreamMode>(config.ga_settings().ga_binary_stream_mode);
+        frame = apply_binary_stream_mode(frame, stream_mode);
 
-            // *** STEP 2: Optional grayscale ***
-            if (app_state->display_settings().get_grayscale_mode() && frame.channels() == 3) {
-                cv::Mat gray;
-                cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
-                cv::cvtColor(gray, frame, cv::COLOR_GRAY2BGR);
-            }
-
-            // *** STEP 3: Ensure BGR for downstream processing ***
-            if (frame.channels() == 1) {
-                cv::cvtColor(frame, frame, cv::COLOR_GRAY2BGR);
-            }
+        // Ensure BGR for downstream processing
+        if (frame.channels() == 1) {
+            cv::cvtColor(frame, frame, cv::COLOR_GRAY2BGR);
         }
     }
 

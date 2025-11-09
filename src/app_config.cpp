@@ -284,6 +284,8 @@ bool AppConfig::load(const std::string& filename) {
             else if (key == "enable_cluster_filter") ga_settings_.enable_cluster_filter = (std::stoi(value) != 0);
             else if (key == "cluster_radius") ga_settings_.cluster_radius = std::stoi(value);
             else if (key == "min_cluster_radius") ga_settings_.min_cluster_radius = std::stoi(value);
+            else if (key == "use_processed_pixels") ga_settings_.use_processed_pixels = (std::stoi(value) != 0);
+            else if (key == "ga_binary_stream_mode") ga_settings_.ga_binary_stream_mode = std::stoi(value);
             else if (key == "cluster_centers") {
                 // Parse cluster centers format: "x1,y1;x2,y2;x3,y3"
                 ga_settings_.cluster_centers.clear();
