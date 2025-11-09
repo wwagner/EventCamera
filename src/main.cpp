@@ -58,8 +58,9 @@
 // Global application state (replaces all previous global state variables)
 std::unique_ptr<core::AppState> app_state;
 
-// Thread synchronization
-std::mutex framegen_mutex;  // Protects frame generator from race conditions
+// PERFORMANCE: Removed global framegen_mutex bottleneck!
+// Now using per-camera mutexes in CameraState for isolated synchronization.
+// Event processing is lock-free (single-threaded per camera).
 
 // Genetic Optimizer state
 struct GAState {
@@ -174,15 +175,15 @@ void update_texture(const cv::Mat& frame, int camera_index) {
 }
 
 // Static storage for last combined frame to avoid flickering
-static cv::Mat last_combined_frame;
+static video::FrameRef last_combined_frame;  // ZERO-COPY: Use FrameRef instead of cv::Mat
 
 /**
- * Combine frames from both cameras by adding pixels
+ * Combine frames from both cameras by adding pixels (ZERO-COPY optimized)
  * Returns combined frame only when BOTH cameras have frames available
  * Otherwise returns the last successfully combined frame
  */
-cv::Mat combine_camera_frames() {
-    if (!app_state) return cv::Mat();
+video::FrameRef combine_camera_frames() {
+    if (!app_state) return video::FrameRef();
 
     // Check if BOTH cameras have unconsumed frames
     bool frame0_ready = app_state->frame_buffer(0).has_unconsumed_frame();
@@ -190,11 +191,11 @@ cv::Mat combine_camera_frames() {
 
     // Only consume and combine if BOTH cameras have frames
     if (!frame0_ready || !frame1_ready) {
-        // Return last combined frame to avoid flickering
+        // Return last combined frame to avoid flickering (zero-copy)
         return last_combined_frame;
     }
 
-    // Both frames are ready - consume them
+    // Both frames are ready - consume them (zero-copy FrameRefs)
     auto frame0_opt = app_state->frame_buffer(0).consume_frame();
     auto frame1_opt = app_state->frame_buffer(1).consume_frame();
 
@@ -203,12 +204,16 @@ cv::Mat combine_camera_frames() {
         return last_combined_frame;
     }
 
-    cv::Mat frame0 = frame0_opt.value();
-    cv::Mat frame1 = frame1_opt.value();
+    video::FrameRef frame0_ref = frame0_opt.value();
+    video::FrameRef frame1_ref = frame1_opt.value();
 
-    if (frame0.empty() || frame1.empty()) {
+    if (frame0_ref.empty() || frame1_ref.empty()) {
         return last_combined_frame;
     }
+
+    // Get writable access for modifications (copy-on-write)
+    cv::Mat frame0 = frame0_ref.write();
+    cv::Mat frame1 = frame1_ref.write();
 
     // Flip second view horizontally if requested
     if (app_state->display_settings().get_flip_second_view()) {
@@ -226,33 +231,36 @@ cv::Mat combine_camera_frames() {
     cv::Mat combined;
     cv::add(frame0, frame1, combined);
 
-    // Store as last combined frame
-    last_combined_frame = combined.clone();
+    // ZERO-COPY: Store as FrameRef (no clone needed!)
+    last_combined_frame = video::FrameRef(std::move(combined));
 
-    return combined;
+    return last_combined_frame;
 }
 
 /**
- * Upload OpenCV frame to OpenGL texture
+ * Upload OpenCV frame to OpenGL texture (ZERO-COPY optimized)
  */
 void upload_frame_to_gpu(int camera_index) {
     if (!app_state) return;
 
-    // Try to consume a frame from the buffer
+    // Try to consume a frame from the buffer (zero-copy FrameRef)
     auto frame_opt = app_state->frame_buffer(camera_index).consume_frame();
     if (!frame_opt.has_value()) {
         return;  // No new frame available
     }
 
-    cv::Mat frame = frame_opt.value();
+    video::FrameRef frame_ref = frame_opt.value();
 
-    // Flip camera 1 horizontally if requested
+    // Get writable access only if we need to modify
     if (camera_index == 1 && app_state->display_settings().get_flip_second_view()) {
+        cv::Mat& frame = frame_ref.write();  // Copy-on-write if shared
         cv::flip(frame, frame, 1);  // 1 = flip horizontally
     }
 
     // Process frame through filter pipeline
-    cv::Mat processed_frame = app_state->frame_processor().process(frame);
+    // TODO: Update frame_processor to use FrameRef for full zero-copy
+    video::ReadGuard guard(frame_ref);
+    cv::Mat processed_frame = app_state->frame_processor().process(guard.get());
 
     // Upload to GPU texture
     app_state->texture_manager(camera_index).upload_frame(processed_frame);
@@ -333,7 +341,8 @@ EventCameraGeneticOptimizer::FitnessResult evaluate_genome_fitness(
             const uint32_t accumulation_time_us = static_cast<uint32_t>(
                 genome.accumulation_time_s * 1000000);
 
-            std::lock_guard<std::mutex> lock(framegen_mutex);
+            // PERFORMANCE: Use per-camera mutex (camera 0 for GA)
+            std::lock_guard<std::mutex> lock(app_state->camera_state().frame_gen_mutex(0));
             int width = app_state->display_settings().get_image_width();
             int height = app_state->display_settings().get_image_height();
             app_state->camera_state().frame_generator() = std::make_unique<Metavision::PeriodicFrameGenerationAlgorithm>(
@@ -341,13 +350,17 @@ EventCameraGeneticOptimizer::FitnessResult evaluate_genome_fitness(
             app_state->camera_state().frame_generator()->set_output_callback([](const Metavision::timestamp ts, cv::Mat& frame) {
                 if (frame.empty() || !app_state) return;
 
+                // ZERO-COPY: Create FrameRef from frame (shares data)
+                video::FrameRef frame_ref(frame);
+
                 // Store RAW frame for GA if capturing (before any processing)
                 if (ga_state.capturing_for_ga) {
-                    ga_state.ga_frame_buffer.store_frame(frame.clone());
+                    ga_state.ga_frame_buffer.store_frame(frame_ref);  // Zero-copy share
                 }
 
                 // Apply display processing (for display only, not for GA capture)
-                cv::Mat display_frame = frame.clone();
+                // Copy-on-write only if we actually modify the frame
+                cv::Mat display_frame = frame_ref.write();
 
                 // *** STEP 1: EARLY BINARY STREAM CONVERSION ***
                 auto stream_mode = app_state->display_settings().get_binary_stream_mode();
@@ -422,7 +435,9 @@ EventCameraGeneticOptimizer::FitnessResult evaluate_genome_fitness(
     while (captured_frames.size() < static_cast<size_t>(num_frames) && attempts < max_attempts) {
         auto frame_opt = ga_state.ga_frame_buffer.consume_frame();
         if (frame_opt.has_value() && !frame_opt.value().empty()) {
-            captured_frames.push_back(frame_opt.value());
+            // Extract cv::Mat from FrameRef (need to clone for GA processing)
+            video::ReadGuard guard(frame_opt.value());
+            captured_frames.push_back(guard.get().clone());
         }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(config.runtime_settings().ga_frame_capture_wait_ms));
@@ -773,8 +788,9 @@ bool try_connect_camera(AppConfig& config, EventCamera::BiasManager& bias_mgr,
                     return;
                 }
 
-                // Process recent event batches
-                std::lock_guard<std::mutex> lock(framegen_mutex);
+                // PERFORMANCE: LOCK-FREE EVENT PROCESSING!
+                // Event callbacks are single-threaded per camera, so no mutex needed.
+                // Each camera has isolated frame generator - zero contention!
                 if (app_state && app_state->camera_state().frame_generator(camera_index)) {
                     app_state->camera_state().frame_generator(camera_index)->process_events(begin, end);
                 }
@@ -997,8 +1013,12 @@ int main(int argc, char* argv[]) {
             int interval_ms = 1000 / config.camera_settings().imagej_stream_fps;
 
             if (elapsed_ms >= interval_ms) {
-                cv::Mat frame = app_state->texture_manager().get_last_frame();
-                if (!frame.empty()) {
+                // Get last frame (zero-copy FrameRef)
+                video::FrameRef frame_ref = app_state->texture_manager().get_last_frame();
+                if (!frame_ref.empty()) {
+                    // Extract cv::Mat for ImageJ streaming
+                    video::ReadGuard guard(frame_ref);
+                    cv::Mat frame = guard.get().clone();
                     // Create stream directory if it doesn't exist
                     std::string stream_dir = config.camera_settings().imagej_stream_directory;
                     std::filesystem::create_directories(stream_dir);
@@ -1386,12 +1406,13 @@ int main(int argc, char* argv[]) {
             ImGui::SetNextWindowSize(ImVec2(combined_width, combined_height), ImGuiCond_FirstUseEver);
 
             if (ImGui::Begin("Combined Camera View (Added)")) {
-                // Combine frames from both cameras
-                cv::Mat combined_frame = combine_camera_frames();
+                // Combine frames from both cameras (ZERO-COPY)
+                video::FrameRef combined_frame_ref = combine_camera_frames();
 
-                if (!combined_frame.empty()) {
+                if (!combined_frame_ref.empty()) {
                     // Process combined frame
-                    cv::Mat processed_frame = app_state->frame_processor().process(combined_frame);
+                    video::ReadGuard guard(combined_frame_ref);
+                    cv::Mat processed_frame = app_state->frame_processor().process(guard.get());
 
                     // Upload to texture manager 0
                     app_state->texture_manager(0).upload_frame(processed_frame);

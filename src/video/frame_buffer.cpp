@@ -15,12 +15,49 @@ void FrameBuffer::store_frame(const cv::Mat& frame) {
     }
 
     std::lock_guard<std::mutex> lock(mutex_);
-    current_frame_ = frame.clone();
+    // ZERO-COPY: Create FrameRef from cv::Mat (shares data, no clone!)
+    current_frame_ = FrameRef(frame);
     frame_consumed_.store(false);  // Mark new frame as not yet consumed
     frames_generated_++;
 }
 
-std::optional<cv::Mat> FrameBuffer::consume_frame() {
+void FrameBuffer::store_frame(const FrameRef& frame_ref) {
+    if (frame_ref.empty()) {
+        return;
+    }
+
+    // Only store new frame if previous frame was consumed
+    if (!frame_consumed_.load()) {
+        frames_dropped_++;
+        return;  // Drop this frame - previous frame not yet displayed
+    }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    // ZERO-COPY: Share FrameRef (reference counting, no clone!)
+    current_frame_ = frame_ref;
+    frame_consumed_.store(false);
+    frames_generated_++;
+}
+
+void FrameBuffer::store_frame(FrameRef&& frame_ref) {
+    if (frame_ref.empty()) {
+        return;
+    }
+
+    // Only store new frame if previous frame was consumed
+    if (!frame_consumed_.load()) {
+        frames_dropped_++;
+        return;  // Drop this frame - previous frame not yet displayed
+    }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    // ZERO-COPY: Move FrameRef (no allocation, just pointer swap)
+    current_frame_ = std::move(frame_ref);
+    frame_consumed_.store(false);
+    frames_generated_++;
+}
+
+std::optional<FrameRef> FrameBuffer::consume_frame() {
     std::lock_guard<std::mutex> lock(mutex_);
 
     if (frame_consumed_.load()) {
@@ -28,6 +65,7 @@ std::optional<cv::Mat> FrameBuffer::consume_frame() {
     }
 
     frame_consumed_.store(true);
+    // ZERO-COPY: Return FrameRef (shares data with stored frame)
     return current_frame_;
 }
 

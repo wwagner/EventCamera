@@ -4,15 +4,19 @@
 #include <atomic>
 #include <mutex>
 #include <optional>
+#include "video/frame_ref.h"
 
 namespace video {
 
 /**
- * Thread-safe frame storage with frame dropping
+ * Thread-safe frame storage with frame dropping (ZERO-COPY optimized)
  *
  * Implements a single-frame buffer that drops new frames if the previous
  * frame has not been consumed yet. This prevents frame queue buildup and
  * maintains real-time display.
+ *
+ * **PERFORMANCE:** Uses FrameRef for zero-copy frame storage.
+ * No clone() calls - frames shared via copy-on-write semantics.
  */
 class FrameBuffer {
 public:
@@ -25,15 +29,27 @@ public:
 
     /**
      * Store new frame (may drop if not consumed)
-     * @param frame Frame to store (will be cloned)
+     * @param frame Frame to store (ZERO-COPY - uses move/share semantics)
      */
     void store_frame(const cv::Mat& frame);
 
     /**
-     * Consume frame for display
-     * @return Frame if available, nullopt otherwise
+     * Store new frame from FrameRef (zero-copy share)
+     * @param frame_ref Frame reference to share
      */
-    std::optional<cv::Mat> consume_frame();
+    void store_frame(const FrameRef& frame_ref);
+
+    /**
+     * Store new frame with move semantics (most efficient)
+     * @param frame_ref Frame reference to move (zero copy)
+     */
+    void store_frame(FrameRef&& frame_ref);
+
+    /**
+     * Consume frame for display (ZERO-COPY)
+     * @return FrameRef if available, nullopt otherwise
+     */
+    std::optional<FrameRef> consume_frame();
 
     /**
      * Check if frame is ready
@@ -54,7 +70,7 @@ public:
     int64_t get_frames_generated() const;
 
 private:
-    cv::Mat current_frame_;
+    FrameRef current_frame_;
     std::atomic<bool> frame_consumed_{true};
     std::atomic<int64_t> frames_dropped_{0};
     std::atomic<int64_t> frames_generated_{0};

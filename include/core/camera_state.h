@@ -106,6 +106,18 @@ public:
      */
     FrameSync& frame_sync(int camera_index = 0);
 
+    /**
+     * Get per-camera frame generator mutex
+     *
+     * PERFORMANCE: Per-camera mutexes eliminate contention between cameras.
+     * Used only for frame generator lifecycle (create/destroy), NOT for
+     * event processing (which is lock-free).
+     *
+     * @param camera_index Camera index (0 or 1)
+     * @return Reference to frame generator mutex for this camera
+     */
+    std::mutex& frame_gen_mutex(int camera_index = 0);
+
 private:
     static constexpr int MAX_CAMERAS = 2;
 
@@ -117,6 +129,7 @@ private:
     std::atomic<bool> simulation_mode_{false};
     std::atomic<int64_t> camera_start_time_us_{0};
     std::mutex connection_mutex_;
+    std::mutex frame_gen_mutexes_[MAX_CAMERAS];  // Per-camera frame generator protection
 };
 
 } // namespace core

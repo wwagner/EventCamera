@@ -54,8 +54,42 @@ void TextureManager::upload_frame(const cv::Mat& frame) {
     width_ = rgb_frame.cols;
     height_ = rgb_frame.rows;
 
-    // Store CPU copy for capture (store the original BGR frame, not RGB)
-    last_frame_ = frame.clone();
+    // ZERO-COPY: Store FrameRef (shares data, no clone!)
+    last_frame_ = FrameRef(frame);
+}
+
+void TextureManager::upload_frame(const FrameRef& frame_ref) {
+    if (frame_ref.empty()) {
+        return;
+    }
+
+    // ZERO-COPY: Get read access to frame data
+    ReadGuard guard(frame_ref);
+    const cv::Mat& frame = guard.get();
+
+    ensure_texture_created();
+
+    // Convert BGR to RGB if needed
+    cv::Mat rgb_frame;
+    if (frame.channels() == 3) {
+        if (frame.type() == CV_8UC3) {
+            cv::cvtColor(frame, rgb_frame, cv::COLOR_BGR2RGB);
+        } else {
+            rgb_frame = frame;
+        }
+    } else {
+        rgb_frame = frame;
+    }
+
+    // Upload to GPU
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, rgb_frame.cols, rgb_frame.rows,
+                 0, GL_RGB, GL_UNSIGNED_BYTE, rgb_frame.data);
+
+    width_ = rgb_frame.cols;
+    height_ = rgb_frame.rows;
+
+    // ZERO-COPY: Store FrameRef (shares data, no clone!)
+    last_frame_ = frame_ref;
 }
 
 void TextureManager::reset() {
@@ -65,7 +99,7 @@ void TextureManager::reset() {
     }
     width_ = 0;
     height_ = 0;
-    last_frame_ = cv::Mat();  // Clear stored frame
+    last_frame_.reset();  // Clear stored frame reference
 }
 
 } // namespace video

@@ -472,9 +472,13 @@ void SettingsPanel::capture_frame() {
     const char* suffixes[] = {"_left", "_right"};
 
     for (int i = 0; i < num_cameras && i < 2; ++i) {
-        cv::Mat frame = state_.texture_manager(i).get_last_frame();
+        // Get last frame (zero-copy FrameRef)
+        video::FrameRef frame_ref = state_.texture_manager(i).get_last_frame();
 
-        if (!frame.empty()) {
+        if (!frame_ref.empty()) {
+            // Extract cv::Mat for saving
+            video::ReadGuard guard(frame_ref);
+            cv::Mat frame = guard.get().clone();
             std::string full_path = base_path + filename_base + suffixes[i] + ".png";
             std::cout << "Attempting to save Camera " << i << " to: " << full_path << std::endl;
 

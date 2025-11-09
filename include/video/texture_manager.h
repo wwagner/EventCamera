@@ -2,13 +2,15 @@
 
 #include <opencv2/opencv.hpp>
 #include <GL/glew.h>
+#include "video/frame_ref.h"
 
 namespace video {
 
 /**
- * OpenGL texture manager for video frames
+ * OpenGL texture manager for video frames (ZERO-COPY optimized)
  *
  * Handles GPU texture creation, uploading, and lifecycle management.
+ * Uses FrameRef to eliminate unnecessary frame cloning.
  */
 class TextureManager {
 public:
@@ -24,6 +26,12 @@ public:
      * @param rgb_frame Frame in RGB format (will be converted if BGR)
      */
     void upload_frame(const cv::Mat& rgb_frame);
+
+    /**
+     * Upload frame from FrameRef (zero-copy)
+     * @param frame_ref Frame reference (shares data, no clone)
+     */
+    void upload_frame(const FrameRef& frame_ref);
 
     /**
      * Get OpenGL texture ID for rendering
@@ -44,10 +52,10 @@ public:
     int get_height() const { return height_; }
 
     /**
-     * Get the last uploaded frame (CPU copy)
-     * @return Last frame, or empty Mat if none available
+     * Get the last uploaded frame (ZERO-COPY - returns FrameRef)
+     * @return Last frame reference, or empty if none available
      */
-    cv::Mat get_last_frame() const { return last_frame_.clone(); }
+    FrameRef get_last_frame() const { return last_frame_; }
 
     /**
      * Reset texture (deletes OpenGL texture)
@@ -60,7 +68,7 @@ private:
     GLuint texture_id_ = 0;
     int width_ = 0;
     int height_ = 0;
-    cv::Mat last_frame_;  // Keep CPU copy for capture
+    FrameRef last_frame_;  // Keep CPU copy for capture (zero-copy)
 };
 
 } // namespace video

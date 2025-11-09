@@ -57,4 +57,8 @@ FrameSync& CameraState::frame_sync(int camera_index) {
     return *frame_syncs_[camera_index];
 }
 
+std::mutex& CameraState::frame_gen_mutex(int camera_index) {
+    return frame_gen_mutexes_[camera_index];
+}
+
 } // namespace core

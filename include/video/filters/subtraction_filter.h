@@ -1,15 +1,18 @@
 #pragma once
 
 #include "video/filters/video_filter.h"
+#include "video/frame_ref.h"
 #include <mutex>
 
 namespace video {
 
 /**
- * Frame subtraction filter
+ * Frame subtraction filter (ZERO-COPY optimized)
  *
  * Subtracts the previous frame from the current frame to highlight changes.
  * Useful for motion detection and visualizing temporal differences.
+ *
+ * PERFORMANCE: Eliminates 3 clone() calls per frame using FrameRef.
  */
 class SubtractionFilter : public IVideoFilter {
 public:
@@ -30,7 +33,7 @@ public:
 
 private:
     bool enabled_ = false;
-    cv::Mat previous_frame_;
+    FrameRef previous_frame_;  // ZERO-COPY: Use FrameRef instead of cv::Mat
     mutable std::mutex mutex_;
 };
 
