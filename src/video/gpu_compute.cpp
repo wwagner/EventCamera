@@ -80,6 +80,8 @@ void main() {
 // Fitness evaluation compute shader
 const char* fitness_shader_source = R"(
 #version 430 core
+#extension GL_NV_shader_atomic_float : enable
+
 layout(local_size_x = 16, local_size_y = 16) in;
 
 layout(binding = 0, r8) uniform readonly image2D input_image;
@@ -443,7 +445,11 @@ void GPUFitnessEvaluator::cleanup() {
 void GPUFitnessEvaluator::evaluate_batch(const std::vector<cv::Mat>& frames,
                                         std::vector<float>& metrics) {
     if (!initialized_) {
-        std::cerr << "GPUFitnessEvaluator not initialized" << std::endl;
+        static bool error_logged = false;
+        if (!error_logged) {
+            std::cerr << "GPUFitnessEvaluator not initialized (GPU acceleration disabled, using CPU fallback)" << std::endl;
+            error_logged = true;
+        }
         return;
     }
 
@@ -451,7 +457,7 @@ void GPUFitnessEvaluator::evaluate_batch(const std::vector<cv::Mat>& frames,
 
     for (const auto& frame : frames) {
         if (frame.type() != CV_8UC1) {
-            std::cerr << "GPUFitnessEvaluator requires CV_8UC1 frames" << std::endl;
+            std::cerr << "GPUFitnessEvaluator requires CV_8UC1 frames (got type=" << frame.type() << ")" << std::endl;
             continue;
         }
 
@@ -483,9 +489,32 @@ void GPUFitnessEvaluator::evaluate_batch(const std::vector<cv::Mat>& frames,
 
         // Calculate final metrics
         float total_pixels = result[3];
+
+        // Validate GPU results
+        if (total_pixels <= 0.0f || !std::isfinite(result[0]) || !std::isfinite(result[1]) || !std::isfinite(result[2])) {
+            std::cerr << "WARNING: GPU produced invalid results, disabling GPU acceleration" << std::endl;
+            std::cerr << "  result[0]=" << result[0] << " result[1]=" << result[1]
+                     << " result[2]=" << result[2] << " total_pixels=" << total_pixels << std::endl;
+
+            // Disable GPU and mark as not initialized
+            cleanup();
+            metrics.clear();
+            return;
+        }
+
         float mean = result[0] / total_pixels;
         float variance = (result[1] / total_pixels) - (mean * mean);
         float non_zero_ratio = result[2] / total_pixels;
+
+        // Validate calculated values
+        if (!std::isfinite(mean) || !std::isfinite(variance) || !std::isfinite(non_zero_ratio)) {
+            std::cerr << "WARNING: GPU calculations produced invalid results, disabling GPU acceleration" << std::endl;
+            std::cerr << "  mean=" << mean << " variance=" << variance << " non_zero_ratio=" << non_zero_ratio << std::endl;
+
+            cleanup();
+            metrics.clear();
+            return;
+        }
 
         // Combined fitness metric
         float fitness = mean + variance * 0.5f + non_zero_ratio * 0.3f;

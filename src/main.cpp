@@ -368,44 +368,18 @@ EventCameraGeneticOptimizer::FitnessResult evaluate_genome_fitness(
             }
         }
 
-        // Update accumulation time
+        // Update accumulation time WITHOUT recreating frame generator (prevents crash)
+        // The frame generator is created once at camera initialization and reused throughout GA
         if (app_state->camera_state().frame_generator()) {
             const uint32_t accumulation_time_us = static_cast<uint32_t>(
                 genome.accumulation_time_us);
 
             // PERFORMANCE: Use per-camera mutex (camera 0 for GA)
             std::lock_guard<std::mutex> lock(app_state->camera_state().frame_gen_mutex(0));
-            int width = app_state->display_settings().get_image_width();
-            int height = app_state->display_settings().get_image_height();
-            app_state->camera_state().frame_generator() = std::make_unique<Metavision::PeriodicFrameGenerationAlgorithm>(
-                width, height, accumulation_time_us);
-            app_state->camera_state().frame_generator()->set_output_callback([](const Metavision::timestamp ts, cv::Mat& frame) {
-                if (frame.empty() || !app_state) return;
 
-                // ZERO-COPY: Create FrameRef from frame (shares data)
-                video::FrameRef frame_ref(frame);
-
-                // Store RAW frame for GA if capturing (before any processing)
-                if (ga_state.capturing_for_ga) {
-                    ga_state.ga_frame_buffer.store_frame(frame_ref);  // Zero-copy share
-                }
-
-                // Display processing now handled by store_bit_extracted_image()
-                // which does early bit extraction and works on 1-bit arrays
-                cv::Mat display_frame = frame_ref.write();
-
-                // Rate limit display updates to target FPS (GA uses camera 0)
-                auto now = std::chrono::steady_clock::now();
-                auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
-                int fps_target = app_state->display_settings().get_target_fps();
-
-                // Check if enough time has passed since last display for camera 0
-                if (app_state->frame_sync(0).should_display_frame(now_us, fps_target)) {
-                    app_state->frame_sync(0).on_frame_generated(ts, now_us);
-                    app_state->frame_sync(0).on_frame_displayed(now_us);
-                    update_texture(display_frame, 0);  // GA test uses camera 0
-                }
-            });
+            // Just update accumulation time - DON'T recreate the generator or callback
+            // Recreating causes race conditions during rapid fitness evaluation (30+ times/generation)
+            app_state->camera_state().frame_generator()->set_accumulation_time_us(accumulation_time_us);
         }
 
         // Apply other genome parameters (trail filter, antiflicker, ERC, etc.)
@@ -493,6 +467,7 @@ EventCameraGeneticOptimizer::FitnessResult evaluate_genome_fitness(
         } else {
             gray = frame.clone();
         }
+
         grayscale_frames.push_back(gray);
 
         // Ensure BGR for downstream processing
@@ -510,8 +485,6 @@ EventCameraGeneticOptimizer::FitnessResult evaluate_genome_fitness(
         // Use GPU metrics for basic fitness scoring
         if (!gpu_metrics.empty()) {
             result.mean_brightness = gpu_metrics[0];  // GPU provides more accurate aggregated metrics
-            std::cout << "GPU fitness eval: " << gpu_metrics.size() << " frames, "
-                     << "mean=" << result.mean_brightness << std::endl;
         }
     }
 
@@ -771,6 +744,14 @@ bool try_connect_camera(AppConfig& config, EventCamera::BiasManager& bias_mgr,
             [camera_index](const Metavision::timestamp ts, cv::Mat& frame) {
                 if (frame.empty() || !app_state) return;
 
+                // ZERO-COPY: Create FrameRef from frame (shares data)
+                video::FrameRef frame_ref(frame);
+
+                // Store RAW frame for GA if capturing (Camera 0 only, before any processing)
+                if (camera_index == 0 && ga_state.capturing_for_ga) {
+                    ga_state.ga_frame_buffer.store_frame(frame_ref);  // Zero-copy share
+                }
+
                 // Rate limit display updates to target FPS (per-camera)
                 auto now = std::chrono::steady_clock::now();
                 auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
@@ -930,7 +911,7 @@ int main(int argc, char* argv[]) {
     }
 
     glfwMakeContextCurrent(window);
-    glfwSwapInterval(0); // Disable vsync for lowest latency
+    glfwSwapInterval(1); // Enable vsync to prevent flickering and limit GPU usage
 
     // Initialize GLEW
     if (glewInit() != GLEW_OK) {
@@ -938,9 +919,21 @@ int main(int argc, char* argv[]) {
         return -1;
     }
 
+    // Log which GPU OpenGL is using
+    const char* vendor = (const char*)glGetString(GL_VENDOR);
+    const char* renderer = (const char*)glGetString(GL_RENDERER);
+    const char* gl_version = (const char*)glGetString(GL_VERSION);
+    std::cout << "\n=== OpenGL GPU Information ===" << std::endl;
+    std::cout << "Vendor:   " << (vendor ? vendor : "Unknown") << std::endl;
+    std::cout << "Renderer: " << (renderer ? renderer : "Unknown") << std::endl;
+    std::cout << "Version:  " << (gl_version ? gl_version : "Unknown") << std::endl;
+    std::cout << "==============================\n" << std::endl;
+
     // Initialize GPU compute infrastructure for GA fitness evaluation
-    std::cout << "Initializing GPU compute shaders..." << std::endl;
-    ga_state.gpu_fitness_evaluator = std::make_unique<video::gpu::GPUFitnessEvaluator>();
+    // DISABLED: GPU context issues when running GA in separate thread
+    // TODO: Fix by making OpenGL context current in GA thread or using shared context
+    // std::cout << "Initializing GPU compute shaders..." << std::endl;
+    // ga_state.gpu_fitness_evaluator = std::make_unique<video::gpu::GPUFitnessEvaluator>();
 
     // Video processing module already initialized by AppState constructor
 
@@ -1033,7 +1026,7 @@ int main(int argc, char* argv[]) {
     auto last_stream_time = std::chrono::steady_clock::now();
     int stream_frame_counter = 0;
 
-    // Main render loop
+    // Main render loop (VSync enabled for automatic frame limiting)
     while (!glfwWindowShouldClose(window) && app_state->is_running()) {
         glfwPollEvents();
 
@@ -1947,7 +1940,7 @@ int main(int argc, char* argv[]) {
         glClear(GL_COLOR_BUFFER_BIT);
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
-        glfwSwapBuffers(window);
+        glfwSwapBuffers(window);  // VSync handles frame limiting automatically
     }
 
     // Cleanup

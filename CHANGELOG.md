@@ -2,6 +2,50 @@
 
 All notable changes to the Event Camera Viewer project are documented in this file.
 
+## [Unreleased] - 2025-11-10
+
+### Fixed
+
+#### Genetic Algorithm Stability and Performance Improvements 🧬
+
+- **Fixed GA crash on startup**
+  - Root cause: Frame generator being recreated on every genome evaluation (30+ times during population initialization)
+  - Solution: Use `set_accumulation_time_us()` API instead of recreating `PeriodicFrameGenerationAlgorithm`
+  - Changed from: Creating new generator + callback on each evaluation
+  - Changed to: Update accumulation time on existing generator
+  - Prevents race conditions from rapid callback destruction/recreation
+  - Location: `src/main.cpp:371-383`
+
+- **Fixed GA frame capture**
+  - Root cause: Initial frame generator callback didn't include GA capture logic
+  - Solution: Added GA frame capture to initial callback setup (Camera 0 only)
+  - Callback now checks `ga_state.capturing_for_ga` flag and stores to `ga_state.ga_frame_buffer`
+  - Frames captured successfully: 30 frames per genome evaluation
+  - Location: `src/main.cpp:751-754`
+
+- **Fixed GPU overload and screen flickering**
+  - Root cause: Rendering loop running unthrottled (no VSync, no frame limiting)
+  - Solution: Enabled VSync with `glfwSwapInterval(1)`
+  - GPU usage reduced by 4x (240 FPS → 60 FPS on 60Hz monitor)
+  - Removed manual sleep-based frame limiting that caused flickering
+  - Location: `src/main.cpp:933`
+
+- **Disabled GPU fitness acceleration (temporary)**
+  - Root cause: OpenGL context mismatch - GPU resources created in main thread but accessed from GA thread
+  - Issue: `glBufferSubData` writing garbage values due to incorrect OpenGL context
+  - Solution: Disabled GPU evaluator initialization, using CPU fallback with SIMD optimization
+  - CPU fallback uses AVX2-accelerated fitness evaluation (still very fast)
+  - TODO: Re-enable with proper OpenGL shared context or context-per-thread
+  - Location: `src/main.cpp:957-961`
+
+### Status
+
+- **Genetic Algorithm**: Fully operational and stable
+  - Population initialization works without crashes
+  - Frame capture working (30 frames per evaluation)
+  - CPU-based fitness evaluation with SIMD (SSE4.1, AVX, AVX2)
+  - Sensitivity analysis remains disabled (see GA_SENSITIVITY_SCALING_PLAN.md)
+
 ## [Unreleased] - 2025-11-09
 
 ### Added

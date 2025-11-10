@@ -5,7 +5,12 @@
 #include <functional>
 #include <string>
 #include <atomic>
+#include <memory>
+#include <map>
 #include <opencv2/core.hpp>
+
+// Forward declarations
+class SensitivityAnalyzer;
 
 /**
  * EventCameraGeneticOptimizer - Genetic algorithm for optimizing event camera parameters
@@ -163,6 +168,16 @@ public:
 
         // Optimization mask (which parameters to optimize)
         Genome::OptimizationMask opt_mask;
+
+        // Sensitivity analysis (Phase 1 & 2)
+        bool enable_sensitivity_analysis = false;  // TEMPORARILY DISABLED - testing crash fix
+        std::string sensitivity_log_file = "sensitivity_analysis_log.csv";
+
+        // Phase 3: Adaptive triggering
+        bool enable_adaptive_sensitivity = true;   // Re-run sensitivity analysis during optimization
+        int sensitivity_update_interval = 10;      // Max generations between sensitivity updates
+        float fitness_variance_threshold = 0.05f;  // Trigger when fitness variance drops below this
+        int adaptive_stagnation_trigger = 5;       // Trigger when no improvement for N generations
     };
 
     /**
@@ -174,6 +189,11 @@ public:
     EventCameraGeneticOptimizer(const OptimizerParams& params,
                                 FitnessCallback fitness_callback,
                                 ProgressCallback progress_callback = nullptr);
+
+    /**
+     * Destructor (defined in .cpp for unique_ptr with forward-declared type)
+     */
+    ~EventCameraGeneticOptimizer();
 
     /**
      * Run optimization (blocking)
@@ -298,7 +318,21 @@ private:
     std::vector<float> best_fitness_history_;
     std::vector<float> avg_fitness_history_;
 
+    // Sensitivity analysis (Phase 1 & 2)
+    std::unique_ptr<SensitivityAnalyzer> sensitivity_analyzer_;
+    bool has_sensitivity_data_;  // Whether we have valid sensitivity data for mutation scaling
+    std::map<std::string, double> normalization_factors_;  // Phase 2: param_name -> scaling factor
+
+    // Phase 3: Adaptive triggering
+    int generations_since_sensitivity_update_;  // Generations since last sensitivity analysis
+    float last_improvement_fitness_;            // Best fitness at last improvement
+    int generations_since_improvement_;         // Generations since last fitness improvement
+
     // Helper methods
+    double get_normalization_factor(const std::string& param_name) const;  // Phase 2: Get mutation scale factor
+    bool should_update_sensitivity() const;     // Phase 3: Check if sensitivity should be re-analyzed
+    void perform_sensitivity_analysis();        // Phase 3: Run sensitivity analysis and update factors
+    float compute_fitness_variance() const;     // Phase 3: Calculate population fitness variance
     void initialize_population();
     FitnessResult evaluate_fitness(const Genome& genome);
     void selection_and_reproduction();

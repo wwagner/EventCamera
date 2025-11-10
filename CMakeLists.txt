@@ -101,6 +101,7 @@ add_executable(event_camera_viewer
     src/ui/ga_panel.cpp
     # Optimization module
     src/optimization/ga_controller.cpp
+    src/optimization/sensitivity_analyzer.cpp
     ${IMGUI_SOURCES}
 )
 

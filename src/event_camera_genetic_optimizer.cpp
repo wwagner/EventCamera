@@ -1,4 +1,5 @@
 #include "event_camera_genetic_optimizer.h"
+#include "optimization/sensitivity_analyzer.h"
 #include <iostream>
 #include <fstream>
 #include <algorithm>
@@ -140,10 +141,23 @@ EventCameraGeneticOptimizer::EventCameraGeneticOptimizer(
     , generation_(0)
     , best_fitness_(1e9f)
     , stagnation_counter_(0)
+    , has_sensitivity_data_(false)
+    , generations_since_sensitivity_update_(0)
+    , last_improvement_fitness_(1e9f)
+    , generations_since_improvement_(0)
 {
     population_.resize(params_.population_size);
     fitness_cache_.resize(params_.population_size);
+
+    // Initialize sensitivity analyzer
+    SensitivityAnalyzer::Config sens_config;
+    sens_config.log_file = params_.sensitivity_log_file;
+    sens_config.verbose_logging = true;
+    sens_config.delta_ratio = 0.01;  // 1% of parameter range
+    sensitivity_analyzer_ = std::make_unique<SensitivityAnalyzer>(sens_config);
 }
+
+EventCameraGeneticOptimizer::~EventCameraGeneticOptimizer() = default;
 
 EventCameraGeneticOptimizer::Genome EventCameraGeneticOptimizer::optimize() {
     running_ = true;
@@ -163,6 +177,12 @@ EventCameraGeneticOptimizer::Genome EventCameraGeneticOptimizer::optimize() {
     // Initialize population
     initialize_population();
 
+    // Perform initial sensitivity analysis (Phase 1)
+    if (params_.enable_sensitivity_analysis && !should_stop_ && sensitivity_analyzer_) {
+        cout << "\nInitial population established. Starting sensitivity analysis..." << endl;
+        perform_sensitivity_analysis();
+    }
+
     // Open log file
     ofstream log_file(params_.log_file);
     log_file << "generation,best_fitness,avg_fitness,best_contrast,best_noise,valid_frames" << endl;
@@ -176,6 +196,22 @@ EventCameraGeneticOptimizer::Genome EventCameraGeneticOptimizer::optimize() {
 
         // Selection and reproduction
         selection_and_reproduction();
+
+        // Phase 3: Track improvement for adaptive sensitivity
+        if (best_fitness_ < last_improvement_fitness_ - 1e-6f) {
+            // Fitness improved
+            last_improvement_fitness_ = best_fitness_;
+            generations_since_improvement_ = 0;
+        } else {
+            // No improvement
+            generations_since_improvement_++;
+        }
+        generations_since_sensitivity_update_++;
+
+        // Phase 3: Check if sensitivity analysis should be re-run
+        if (params_.enable_adaptive_sensitivity && should_update_sensitivity() && !should_stop_) {
+            perform_sensitivity_analysis();
+        }
 
         // Log progress
         if (generation_ % params_.log_interval == 0) {
@@ -414,12 +450,14 @@ void EventCameraGeneticOptimizer::mutate(Genome& genome) {
     }
     if (genome.opt_mask.bias_diff_on && mutate_dist(rng_)) {
         int range = genome.ranges.diff_on_max - genome.ranges.diff_on_min;
-        normal_distribution<float> noise(0.0f, params_.mutation_strength * range);
+        double scale = get_normalization_factor("bias_diff_on");  // Phase 2: adaptive scaling
+        normal_distribution<float> noise(0.0f, params_.mutation_strength * range * scale);
         genome.bias_diff_on += static_cast<int>(noise(rng_));
     }
     if (genome.opt_mask.bias_diff_off && mutate_dist(rng_)) {
         int range = genome.ranges.diff_off_max - genome.ranges.diff_off_min;
-        normal_distribution<float> noise(0.0f, params_.mutation_strength * range);
+        double scale = get_normalization_factor("bias_diff_off");  // Phase 2: adaptive scaling
+        normal_distribution<float> noise(0.0f, params_.mutation_strength * range * scale);
         genome.bias_diff_off += static_cast<int>(noise(rng_));
     }
     if (genome.opt_mask.bias_refr && mutate_dist(rng_)) {
@@ -434,7 +472,8 @@ void EventCameraGeneticOptimizer::mutate(Genome& genome) {
     }
     if (genome.opt_mask.bias_hpf && mutate_dist(rng_)) {
         int range = genome.ranges.hpf_max - genome.ranges.hpf_min;
-        normal_distribution<float> noise(0.0f, params_.mutation_strength * range);
+        double scale = get_normalization_factor("bias_hpf");  // Phase 2: adaptive scaling
+        normal_distribution<float> noise(0.0f, params_.mutation_strength * range * scale);
         genome.bias_hpf += static_cast<int>(noise(rng_));
     }
 
@@ -449,7 +488,8 @@ void EventCameraGeneticOptimizer::mutate(Genome& genome) {
     // Mutate trail filter threshold only (enable is always true, type is STC_KEEP_TRAIL)
     if (genome.opt_mask.trail_filter && mutate_dist(rng_)) {
         int range = genome.ranges.trail_max - genome.ranges.trail_min;
-        normal_distribution<float> noise(0.0f, params_.mutation_strength * range);
+        double scale = get_normalization_factor("trail_threshold_us");  // Phase 2: adaptive scaling
+        normal_distribution<float> noise(0.0f, params_.mutation_strength * range * scale);
         genome.trail_threshold_us += static_cast<int>(noise(rng_));
     }
 
@@ -952,4 +992,114 @@ float EventCameraGeneticOptimizer::calculate_cluster_fitness(
                    brightness_outside;                           // Penalize bright background
 
     return fitness;
+}
+
+// ============================================================================
+// Phase 2: Sensitivity-Based Mutation Scaling
+// ============================================================================
+
+double EventCameraGeneticOptimizer::get_normalization_factor(const std::string& param_name) const
+{
+    // If sensitivity data is not available, return 1.0 (no scaling)
+    if (!has_sensitivity_data_) {
+        return 1.0;
+    }
+
+    // Look up normalization factor for this parameter
+    auto it = normalization_factors_.find(param_name);
+    if (it != normalization_factors_.end()) {
+        return it->second;
+    }
+
+    // Parameter not analyzed (not in reduced set), return 1.0 (baseline)
+    return 1.0;
+}
+
+// ============================================================================
+// Phase 3: Adaptive Triggering
+// ============================================================================
+
+bool EventCameraGeneticOptimizer::should_update_sensitivity() const
+{
+    // Don't update if we don't have a sensitivity analyzer
+    if (!sensitivity_analyzer_) {
+        return false;
+    }
+
+    // Trigger 1: Periodic update (every N generations)
+    if (generations_since_sensitivity_update_ >= params_.sensitivity_update_interval) {
+        return true;
+    }
+
+    // Trigger 2: Stagnation (no improvement for N generations)
+    if (generations_since_improvement_ >= params_.adaptive_stagnation_trigger) {
+        return true;
+    }
+
+    // Trigger 3: Population convergence (low fitness variance)
+    float variance = compute_fitness_variance();
+    if (variance < params_.fitness_variance_threshold) {
+        return true;
+    }
+
+    return false;
+}
+
+void EventCameraGeneticOptimizer::perform_sensitivity_analysis()
+{
+    cout << "\n>>> Re-analyzing parameter sensitivity (generation " << generation_ << ")..." << endl;
+
+    // Create fitness evaluator lambda
+    auto fitness_evaluator = [this](const Genome& genome) -> float {
+        FitnessResult result = evaluate_fitness(genome);
+        return result.combined_fitness;
+    };
+
+    // Perform sensitivity analysis on the current best genome
+    auto sensitivity_result = sensitivity_analyzer_->analyze(
+        best_genome_,
+        fitness_evaluator,
+        generation_
+    );
+
+    // Update normalization factors
+    normalization_factors_.clear();
+    for (const auto& ps : sensitivity_result.param_sensitivities) {
+        normalization_factors_[ps.param_name] = ps.normalization_factor;
+    }
+    has_sensitivity_data_ = true;
+
+    // Reset counter
+    generations_since_sensitivity_update_ = 0;
+
+    // Log and print results
+    sensitivity_analyzer_->log_result(sensitivity_result);
+    sensitivity_analyzer_->print_result(sensitivity_result);
+
+    cout << ">>> Sensitivity analysis complete. Updated mutation scaling factors." << endl;
+    cout << "    Adaptive mutation scaling: " << (has_sensitivity_data_ ? "ENABLED" : "DISABLED") << endl;
+}
+
+float EventCameraGeneticOptimizer::compute_fitness_variance() const
+{
+    if (fitness_cache_.empty()) {
+        return 1e9f;
+    }
+
+    // Calculate mean fitness
+    float mean = 0.0f;
+    for (const auto& fit : fitness_cache_) {
+        mean += fit.combined_fitness;
+    }
+    mean /= fitness_cache_.size();
+
+    // Calculate variance
+    float variance = 0.0f;
+    for (const auto& fit : fitness_cache_) {
+        float diff = fit.combined_fitness - mean;
+        variance += diff * diff;
+    }
+    variance /= fitness_cache_.size();
+
+    return variance;
 }
