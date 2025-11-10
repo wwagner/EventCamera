@@ -4,6 +4,43 @@ All notable changes to the Event Camera Viewer project are documented in this fi
 
 ## [Unreleased] - 2025-11-10
 
+### Added
+
+#### Color-Coded Stereo Visualization 🎨
+
+- **Enhanced "Add Images" functionality for dual camera visualization**
+  - Color-coded overlay shows which camera sees each event:
+    - Camera 0 high values → GREEN channel
+    - Camera 1 high values → BLUE channel
+    - Overlapping high values → RED channel
+  - Maintains 8-bit intensity gradations (not binary) for smooth, round blob appearance
+  - Direct 1:1 pixel-to-color mapping preserving all intensity information
+  - 2.5× brightness boost for improved visibility
+  - Uses SIMD-accelerated grayscale conversion for performance
+  - Combined view replaces left camera display (maintains side-by-side layout)
+  - Window title updates to "Combined View (Camera 0 + Camera 1)" when enabled
+  - Location: `src/main.cpp:222-333` (combine_camera_frames function)
+  - Display integration: `src/main.cpp:1492-1569`
+
+### Changed
+
+#### Documentation Consolidation 📚
+
+- **Restructured root directory documentation**
+  - Consolidated 14 markdown files into 7 organized files
+  - Created `DEVELOPMENT_NOTES.md` (consolidated 5 implementation docs):
+    - Code refactoring summaries
+    - Immediate settings update details
+    - Dual camera support documentation
+    - Binary stream implementation plans
+  - Created `OPTIMIZATION_GUIDE.md` (consolidated 2 performance docs):
+    - Completed optimization phases (1-3)
+    - Future optimization opportunities
+    - GA sensitivity scaling analysis
+  - Removed 9 redundant files after consolidation
+  - Preserved essential user-facing documentation
+  - Improved organization for developers and users
+
 ### Fixed
 
 #### Genetic Algorithm Stability and Performance Improvements 🧬

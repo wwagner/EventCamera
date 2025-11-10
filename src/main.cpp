@@ -259,14 +259,72 @@ video::FrameRef combine_camera_frames() {
 
     // Ensure frames are the same size and type
     if (frame0.size() != frame1.size() || frame0.type() != frame1.type()) {
-        // Resize frame1 to match frame0 if needed
-        cv::resize(frame1, frame1, frame0.size());
+        // Resize frame1 to match frame0 if needed (using NEAREST for 1:1 pixel mapping)
+        cv::resize(frame1, frame1, frame0.size(), 0, 0, cv::INTER_NEAREST);
         frame1.convertTo(frame1, frame0.type());
     }
 
-    // Add frames together (saturate at 255 for uint8)
+    // === COLOR-CODED STEREO VISUALIZATION ===
+    // Convert to 8-bit grayscale if needed
+    cv::Mat gray0, gray1;
+    if (frame0.channels() == 3) {
+        gray0 = cv::Mat(frame0.size(), CV_8UC1);
+        video::simd::bgr_to_gray(frame0, gray0);  // Use SIMD acceleration
+    } else {
+        gray0 = frame0.clone();  // Clone to avoid modifying original
+    }
+    if (frame1.channels() == 3) {
+        gray1 = cv::Mat(frame1.size(), CV_8UC1);
+        video::simd::bgr_to_gray(frame1, gray1);  // Use SIMD acceleration
+    } else {
+        gray1 = frame1.clone();  // Clone to avoid modifying original
+    }
+
+    // Brightness boost: multiply intensity by 2.5x (saturate at 255)
+    cv::Mat boosted0, boosted1;
+    gray0.convertTo(boosted0, CV_16U);  // Convert to 16-bit to avoid overflow
+    boosted0 = boosted0 * 2.5;
+    boosted0.convertTo(boosted0, CV_8U); // Convert back and auto-saturate at 255
+
+    gray1.convertTo(boosted1, CV_16U);
+    boosted1 = boosted1 * 2.5;
+    boosted1.convertTo(boosted1, CV_8U);
+
+    // Create output channels directly from intensity values (no binary masks!)
+    cv::Mat blue_channel = cv::Mat::zeros(gray0.size(), CV_8UC1);
+    cv::Mat green_channel = cv::Mat::zeros(gray0.size(), CV_8UC1);
+    cv::Mat red_channel = cv::Mat::zeros(gray0.size(), CV_8UC1);
+
+    // Direct 1:1 pixel mapping - simple color assignment
+    for (int y = 0; y < boosted0.rows; y++) {
+        const uchar* row0 = boosted0.ptr<uchar>(y);
+        const uchar* row1 = boosted1.ptr<uchar>(y);
+        uchar* b_row = blue_channel.ptr<uchar>(y);
+        uchar* g_row = green_channel.ptr<uchar>(y);
+        uchar* r_row = red_channel.ptr<uchar>(y);
+
+        for (int x = 0; x < boosted0.cols; x++) {
+            uchar val0 = row0[x];
+            uchar val1 = row1[x];
+
+            if (val0 > 0 && val1 > 0) {
+                // Both cameras see this pixel → RED (max intensity)
+                r_row[x] = std::max(val0, val1);
+            } else if (val0 > 0) {
+                // Only camera 0 → GREEN (exact pixel value)
+                g_row[x] = val0;
+            } else if (val1 > 0) {
+                // Only camera 1 → BLUE (exact pixel value)
+                b_row[x] = val1;
+            }
+            // else: both zero → stay black (already initialized to zeros)
+        }
+    }
+
+    // Merge channels into BGR output
     cv::Mat combined;
-    cv::add(frame0, frame1, combined);
+    std::vector<cv::Mat> channels = {blue_channel, green_channel, red_channel};
+    cv::merge(channels, combined);
 
     // ZERO-COPY: Store as FrameRef (no clone needed!)
     last_combined_frame = video::FrameRef(std::move(combined));
@@ -1434,25 +1492,28 @@ int main(int argc, char* argv[]) {
         // Check if we should display combined view or separate views
         bool add_images_mode = app_state->display_settings().get_add_images_mode();
 
-        if (add_images_mode && num_cameras >= 2) {
-            // === COMBINED VIEW MODE: Single window showing added frames ===
-            float combined_width = window_width - 2 * cam_spacing;
-            float combined_height = (combined_width / camera_aspect) + 30.0f;
-
+        // === Camera 0 (Left) - Shows combined image if add_images_mode is enabled ===
+        if (num_cameras > 0) {
             ImGui::SetNextWindowPos(ImVec2(cam_spacing, cam_spacing), ImGuiCond_FirstUseEver);
-            ImGui::SetNextWindowSize(ImVec2(combined_width, combined_height), ImGuiCond_FirstUseEver);
+            ImGui::SetNextWindowSize(ImVec2(single_cam_width, single_cam_height), ImGuiCond_FirstUseEver);
 
-            if (ImGui::Begin("Combined Camera View (Added)")) {
-                // Combine frames from both cameras (ZERO-COPY)
-                video::FrameRef combined_frame_ref = combine_camera_frames();
+            const char* window_title = add_images_mode ? "Combined View (Camera 0 + Camera 1)" : "Camera 0";
+            if (ImGui::Begin(window_title)) {
+                if (add_images_mode && num_cameras >= 2) {
+                    // Show combined image from both cameras
+                    video::FrameRef combined_frame_ref = combine_camera_frames();
 
-                if (!combined_frame_ref.empty()) {
-                    // Process combined frame
-                    video::ReadGuard guard(combined_frame_ref);
-                    cv::Mat processed_frame = app_state->frame_processor().process(guard.get());
+                    if (!combined_frame_ref.empty()) {
+                        // Process combined frame
+                        video::ReadGuard guard(combined_frame_ref);
+                        cv::Mat processed_frame = app_state->frame_processor().process(guard.get());
 
-                    // Upload to texture manager 0
-                    app_state->texture_manager(0).upload_frame(processed_frame);
+                        // Upload to texture manager 0
+                        app_state->texture_manager(0).upload_frame(processed_frame);
+                    }
+                } else {
+                    // Show normal Camera 0 image
+                    upload_frame_to_gpu(0);
                 }
 
                 if (app_state->texture_manager(0).get_texture_id() != 0) {
@@ -1475,77 +1536,36 @@ int main(int argc, char* argv[]) {
                 }
             }
             ImGui::End();
+        }
 
-            // Update settings_top for combined view
-            settings_top = combined_height + 20.0f;
+        // === Camera 1 (Right) - Always shows Camera 1 ===
+        if (num_cameras > 1) {
+            ImGui::SetNextWindowPos(ImVec2(single_cam_width + 2 * cam_spacing, cam_spacing), ImGuiCond_FirstUseEver);
+            ImGui::SetNextWindowSize(ImVec2(single_cam_width, single_cam_height), ImGuiCond_FirstUseEver);
 
-        } else {
-            // === SEPARATE VIEW MODE: Two camera windows side-by-side ===
-            // Camera 0 (Left) | Camera 1 (Right)
-            // Bit selection from dropdown applies to both cameras
+            if (ImGui::Begin("Camera 1")) {
+                upload_frame_to_gpu(1);  // Index 1 = Camera 1
 
-            // Camera 0 (Left)
-            if (num_cameras > 0) {
-                ImGui::SetNextWindowPos(ImVec2(cam_spacing, cam_spacing), ImGuiCond_FirstUseEver);
-                ImGui::SetNextWindowSize(ImVec2(single_cam_width, single_cam_height), ImGuiCond_FirstUseEver);
+                if (app_state->texture_manager(1).get_texture_id() != 0) {
+                    ImVec2 window_size = ImGui::GetContentRegionAvail();
 
-                if (ImGui::Begin("Camera 0")) {
-                    upload_frame_to_gpu(0);  // Index 0 = Camera 0
+                    // Maintain aspect ratio
+                    float aspect = static_cast<float>(app_state->texture_manager(1).get_width()) / app_state->texture_manager(1).get_height();
+                    float display_width = window_size.x;
+                    float display_height = display_width / aspect;
 
-                    if (app_state->texture_manager(0).get_texture_id() != 0) {
-                        ImVec2 window_size = ImGui::GetContentRegionAvail();
-
-                        // Maintain aspect ratio
-                        float aspect = static_cast<float>(app_state->texture_manager(0).get_width()) / app_state->texture_manager(0).get_height();
-                        float display_width = window_size.x;
-                        float display_height = display_width / aspect;
-
-                        if (display_height > window_size.y) {
-                            display_height = window_size.y;
-                            display_width = display_height * aspect;
-                        }
-
-                        ImGui::Image((void*)(intptr_t)app_state->texture_manager(0).get_texture_id(),
-                                   ImVec2(display_width, display_height));
-                    } else {
-                        ImGui::Text("Waiting for camera 0 frames...");
+                    if (display_height > window_size.y) {
+                        display_height = window_size.y;
+                        display_width = display_height * aspect;
                     }
+
+                    ImGui::Image((void*)(intptr_t)app_state->texture_manager(1).get_texture_id(),
+                               ImVec2(display_width, display_height));
+                } else {
+                    ImGui::Text("Waiting for camera 1 frames...");
                 }
-                ImGui::End();
             }
-
-            // Camera 1 (Right)
-            if (num_cameras > 1) {
-                ImGui::SetNextWindowPos(ImVec2(single_cam_width + 2 * cam_spacing, cam_spacing), ImGuiCond_FirstUseEver);
-                ImGui::SetNextWindowSize(ImVec2(single_cam_width, single_cam_height), ImGuiCond_FirstUseEver);
-
-                if (ImGui::Begin("Camera 1")) {
-                    upload_frame_to_gpu(1);  // Index 1 = Camera 1
-
-                    if (app_state->texture_manager(1).get_texture_id() != 0) {
-                        ImVec2 window_size = ImGui::GetContentRegionAvail();
-
-                        // Maintain aspect ratio
-                        float aspect = static_cast<float>(app_state->texture_manager(1).get_width()) / app_state->texture_manager(1).get_height();
-                        float display_width = window_size.x;
-                        float display_height = display_width / aspect;
-
-                        if (display_height > window_size.y) {
-                            display_height = window_size.y;
-                            display_width = display_height * aspect;
-                        }
-
-                        ImGui::Image((void*)(intptr_t)app_state->texture_manager(1).get_texture_id(),
-                                   ImVec2(display_width, display_height));
-                    } else {
-                        ImGui::Text("Waiting for camera 1 frames...");
-                    }
-                }
-                ImGui::End();
-            }
-
-            // Update settings_top to account for 1 row of cameras
-            settings_top = single_cam_height + 20.0f;
+            ImGui::End();
         }
 
         // === Settings strips below cameras ===
