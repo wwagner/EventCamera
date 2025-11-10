@@ -259,8 +259,9 @@ video::FrameRef combine_camera_frames() {
 
     // Ensure frames are the same size and type
     if (frame0.size() != frame1.size() || frame0.type() != frame1.type()) {
-        // Resize frame1 to match frame0 if needed (using NEAREST for 1:1 pixel mapping)
-        cv::resize(frame1, frame1, frame0.size(), 0, 0, cv::INTER_NEAREST);
+        // Resize frame1 to match frame0 if needed (using LINEAR for smooth edges)
+        // For binary images, LINEAR preserves round shapes better than NEAREST
+        cv::resize(frame1, frame1, frame0.size(), 0, 0, cv::INTER_LINEAR);
         frame1.convertTo(frame1, frame0.type());
     }
 
@@ -280,44 +281,43 @@ video::FrameRef combine_camera_frames() {
         gray1 = frame1.clone();  // Clone to avoid modifying original
     }
 
-    // Brightness boost: multiply intensity by 2.5x (saturate at 255)
-    cv::Mat boosted0, boosted1;
-    gray0.convertTo(boosted0, CV_16U);  // Convert to 16-bit to avoid overflow
-    boosted0 = boosted0 * 2.5;
-    boosted0.convertTo(boosted0, CV_8U); // Convert back and auto-saturate at 255
-
-    gray1.convertTo(boosted1, CV_16U);
-    boosted1 = boosted1 * 2.5;
-    boosted1.convertTo(boosted1, CV_8U);
-
     // Create output channels directly from intensity values (no binary masks!)
     cv::Mat blue_channel = cv::Mat::zeros(gray0.size(), CV_8UC1);
     cv::Mat green_channel = cv::Mat::zeros(gray0.size(), CV_8UC1);
     cv::Mat red_channel = cv::Mat::zeros(gray0.size(), CV_8UC1);
 
-    // Direct 1:1 pixel mapping - simple color assignment
-    for (int y = 0; y < boosted0.rows; y++) {
-        const uchar* row0 = boosted0.ptr<uchar>(y);
-        const uchar* row1 = boosted1.ptr<uchar>(y);
+    // Apply Gaussian blur to preserve round shapes and smooth edges
+    cv::Mat smooth0, smooth1;
+    cv::GaussianBlur(gray0, smooth0, cv::Size(3, 3), 0.5);
+    cv::GaussianBlur(gray1, smooth1, cv::Size(3, 3), 0.5);
+
+    // Direct 1:1 pixel mapping with soft thresholding
+    const float boost_factor = 2.5f;
+    const uchar threshold = 5;  // Soft threshold to preserve anti-aliasing
+
+    for (int y = 0; y < smooth0.rows; y++) {
+        const uchar* row0 = smooth0.ptr<uchar>(y);
+        const uchar* row1 = smooth1.ptr<uchar>(y);
         uchar* b_row = blue_channel.ptr<uchar>(y);
         uchar* g_row = green_channel.ptr<uchar>(y);
         uchar* r_row = red_channel.ptr<uchar>(y);
 
-        for (int x = 0; x < boosted0.cols; x++) {
-            uchar val0 = row0[x];
-            uchar val1 = row1[x];
+        for (int x = 0; x < smooth0.cols; x++) {
+            // Apply boost during assignment, preserving gradients
+            uchar val0 = std::min(255.0f, row0[x] * boost_factor);
+            uchar val1 = std::min(255.0f, row1[x] * boost_factor);
 
-            if (val0 > 0 && val1 > 0) {
-                // Both cameras see this pixel → RED (max intensity)
+            if (val0 > threshold && val1 > threshold) {
+                // Both cameras see this pixel → RED (blend values)
                 r_row[x] = std::max(val0, val1);
-            } else if (val0 > 0) {
+            } else if (val0 > threshold) {
                 // Only camera 0 → GREEN (exact pixel value)
                 g_row[x] = val0;
-            } else if (val1 > 0) {
+            } else if (val1 > threshold) {
                 // Only camera 1 → BLUE (exact pixel value)
                 b_row[x] = val1;
             }
-            // else: both zero → stay black (already initialized to zeros)
+            // else: both below threshold → stay black (already initialized to zeros)
         }
     }
 
