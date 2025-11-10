@@ -295,6 +295,11 @@ video::FrameRef combine_camera_frames() {
     const float boost_factor = 2.5f;
     const uchar threshold = 5;  // Soft threshold to preserve anti-aliasing
 
+    // Statistics for red pixel percentage calculation
+    int red_pixel_count = 0;
+    int green_pixel_count = 0;
+    int blue_pixel_count = 0;
+
     for (int y = 0; y < smooth0.rows; y++) {
         const uchar* row0 = smooth0.ptr<uchar>(y);
         const uchar* row1 = smooth1.ptr<uchar>(y);
@@ -310,16 +315,27 @@ video::FrameRef combine_camera_frames() {
             if (val0 > threshold && val1 > threshold) {
                 // Both cameras see this pixel → RED (blend values)
                 r_row[x] = std::max(val0, val1);
+                red_pixel_count++;
             } else if (val0 > threshold) {
                 // Only camera 0 → GREEN (exact pixel value)
                 g_row[x] = val0;
+                green_pixel_count++;
             } else if (val1 > threshold) {
                 // Only camera 1 → BLUE (exact pixel value)
                 b_row[x] = val1;
+                blue_pixel_count++;
             }
             // else: both below threshold → stay black (already initialized to zeros)
         }
     }
+
+    // Calculate red pixel percentage (red pixels / total non-black pixels)
+    int total_non_black = red_pixel_count + green_pixel_count + blue_pixel_count;
+    float red_percentage = (total_non_black > 0) ?
+        (100.0f * red_pixel_count / total_non_black) : 0.0f;
+
+    // Store for UI display
+    app_state->display_settings().set_red_pixel_percentage(red_percentage);
 
     // Merge channels into BGR output
     cv::Mat combined;

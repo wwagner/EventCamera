@@ -367,6 +367,10 @@ void SettingsPanel::render_display_settings() {
             state_.display_settings().set_flip_second_view(flip_second);
             std::cout << "Flip second view " << (flip_second ? "enabled" : "disabled") << std::endl;
         }
+
+        // Display red pixel percentage (overlap statistics)
+        float red_percentage = state_.display_settings().get_red_pixel_percentage();
+        ImGui::Text("Red pixels (overlap): %.1f%%", red_percentage);
     }
 
     ImGui::Spacing();

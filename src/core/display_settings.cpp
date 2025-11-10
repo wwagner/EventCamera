@@ -71,4 +71,12 @@ DisplaySettings::DisplayMode DisplaySettings::get_display_mode() const {
     return static_cast<DisplayMode>(display_mode_.load());
 }
 
+void DisplaySettings::set_red_pixel_percentage(float percentage) {
+    red_pixel_percentage_.store(percentage);
+}
+
+float DisplaySettings::get_red_pixel_percentage() const {
+    return red_pixel_percentage_.load();
+}
+
 } // namespace core

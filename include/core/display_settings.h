@@ -146,6 +146,18 @@ public:
      */
     DisplayMode get_display_mode() const;
 
+    /**
+     * Set red pixel percentage (for combined view statistics)
+     * @param percentage Percentage of non-black pixels that are red (0.0 to 100.0)
+     */
+    void set_red_pixel_percentage(float percentage);
+
+    /**
+     * Get red pixel percentage
+     * @return Percentage of non-black pixels that are red (0.0 to 100.0)
+     */
+    float get_red_pixel_percentage() const;
+
 private:
     std::atomic<int> target_display_fps_{10};
     std::atomic<int> image_width_{1280};
@@ -156,6 +168,7 @@ private:
     std::atomic<int> binary_stream_mode_{0};  // BinaryStreamMode as int (default: BIT_0)
     std::atomic<int> binary_stream_mode_2_{7};  // Second bit selector (default: BIT_7)
     std::atomic<int> display_mode_{0};  // DisplayMode as int (default: OR_BEFORE_PROCESSING)
+    std::atomic<float> red_pixel_percentage_{0.0f};  // Percentage of non-black pixels that are red
 };
 
 } // namespace core
